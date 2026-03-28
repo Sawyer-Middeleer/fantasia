@@ -1,0 +1,21 @@
+Deal ID,Deal Name,Deal Stage,Amount,Close Date,Associated Contact,Associated Company,Notes
+DEAL-1,Mosaic Labs - Enterprise License,contractsent,6441,2026-04-15,CONT-221,COMP-28,
+DEAL-2,Zephyr Ventures - Enterprise License,closedlost,27342,2026-04-03,CONT-245,COMP-50,
+DEAL-3,Wren Technologies - Pro License,closedwon,20558,2026-05-10,CONT-24,COMP-30,
+DEAL-4,Atlas Operations - Starter License,qualifiedtobuy,2115,2026-05-17,CONT-356,COMP-5,
+DEAL-5,Sterling Dynamics - Enterprise License,decisionmakerboughtin,47360,2026-04-27,CONT-87,COMP-9,
+DEAL-6,Vortex Software - Enterprise License,qualifiedtobuy,24561,2026-03-24,CONT-403,COMP-2,
+DEAL-7,Driftwood Studios - Pro License,contractsent,17851,2026-05-06,CONT-179,COMP-28,
+DEAL-8,Meridian Partners - Enterprise License,decisionmakerboughtin,32476,2026-04-05,CONT-3,COMP-29,
+DEAL-9,Fathom Digital - Starter License,presentationscheduled,1760,2026-03-31,CONT-536,COMP-34,
+DEAL-10,Granite Partners - Enterprise License,decisionmakerboughtin,15239,2026-04-13,CONT-18,COMP-8,
+DEAL-11,Nexus Group - Starter License,appointmentscheduled,17237,2026-06-03,CONT-532,COMP-14,
+DEAL-12,Solstice Digital - Starter License,appointmentscheduled,8844,2026-04-02,CONT-473,COMP-9,
+DEAL-13,Summit Consulting - Pro License,closedlost,15561,2026-04-26,CONT-122,COMP-16,
+DEAL-14,Clearwave Solutions - Pro License,contractsent,35602,2026-03-15,CONT-527,COMP-19,
+DEAL-15,Nexus Group - Enterprise License,contractsent,37633,2026-04-21,CONT-455,COMP-8,
+DEAL-16,Meridian Partners - Enterprise License,closedwon,8297,2026-06-02,,COMP-31,ORPHANED_DEAL_SEED
+DEAL-17,Horizon Digital - Pro License,decisionmakerboughtin,35566,2026-05-23,,COMP-15,ORPHANED_DEAL_SEED
+DEAL-18,Alpine Consulting - Starter License,appointmentscheduled,13759,,,COMP-11,ORPHANED_DEAL_SEED
+DEAL-19,Gable Partners - Pro License,closedwon,38162,,,COMP-9,ORPHANED_DEAL_SEED
+DEAL-20,Quest Solutions - Starter License,closedlost,20257,,,COMP-9,ORPHANED_DEAL_SEED

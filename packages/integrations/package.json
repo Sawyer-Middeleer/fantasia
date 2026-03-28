@@ -1,0 +1,29 @@
+{
+  "name": "@fantasia/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./hubspot": "./src/hubspot/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./fix": "./src/fix/index.ts"
+  },
+  "typesVersions": {
+    "*": {
+      "hubspot": ["./src/hubspot/index.ts"],
+      "audit": ["./src/audit/index.ts"],
+      "fix": ["./src/fix/index.ts"]
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hubspot/api-client": "^13.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}
