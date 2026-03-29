@@ -152,19 +152,18 @@ async function saveAttioApiKey(
     process.exit(1);
   }
 
-  const self = (await res.json()) as Record<string, unknown>;
-  const workspace = ((self.data ?? self) as Record<string, unknown>).workspace as { id: string; name: string };
+  const self = (await res.json()) as { workspace_id: string; workspace_name: string };
 
   saveAttioTokens({
     access_token: apiKey,
     auth_type: "api_key",
-    workspace_id: workspace.id,
-    workspace_name: workspace.name,
+    workspace_id: self.workspace_id,
+    workspace_name: self.workspace_name,
   });
 
   console.log(
     chalk.green("\n✓ Connected to Attio") +
-      chalk.dim(` (workspace: ${workspace.name})`)
+      chalk.dim(` (workspace: ${self.workspace_name})`)
   );
 }
 
@@ -238,19 +237,18 @@ async function loginAttioOAuth(chalk: typeof import("chalk").default) {
     const selfRes = await fetch("https://api.attio.com/v2/self", {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
-    const self = (await selfRes.json()) as Record<string, unknown>;
-    const workspace = ((self.data ?? self) as Record<string, unknown>).workspace as { id: string; name: string };
+    const self = (await selfRes.json()) as { workspace_id: string; workspace_name: string };
 
     saveAttioTokens({
       access_token: tokens.access_token,
       auth_type: "oauth",
-      workspace_id: workspace.id,
-      workspace_name: workspace.name,
+      workspace_id: self.workspace_id,
+      workspace_name: self.workspace_name,
     });
 
     console.log(
       chalk.green("\n✓ Connected to Attio") +
-        chalk.dim(` (workspace: ${workspace.name})`)
+        chalk.dim(` (workspace: ${self.workspace_name})`)
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
