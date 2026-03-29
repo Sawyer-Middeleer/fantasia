@@ -4,7 +4,6 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "bun run --filter @fantasia/web dev",
-    "dev:convex": "bunx convex dev",
     "build": "bun run --filter @fantasia/web build",
     "build:cli": "bun run --filter fantasia-sh build",
     "typecheck": "bun run --filter '*' typecheck",

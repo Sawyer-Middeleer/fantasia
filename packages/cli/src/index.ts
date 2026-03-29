@@ -10,16 +10,14 @@ const program = new Command();
 
 program
   .name(pkg.name)
-  .description("CLI-first CRM data enrichment & hygiene")
+  .description("A collection of micro tools for building and running a business")
   .version(pkg.version);
 
 program
   .command("login")
-  .description("Authenticate with a CRM integration")
-  .option("--hubspot", "Connect to HubSpot via OAuth")
-  .option("--attio", "Connect to Attio (API key or OAuth)")
-  .option("--api-key <key>", "Attio API key (skip interactive prompt)")
-  .action(async (options: { hubspot?: boolean; attio?: boolean; apiKey?: string }) => {
+  .description("Authenticate with Attio")
+  .option("--api-key <key>", "API key (skip interactive prompt)")
+  .action(async (options: { apiKey?: string }) => {
     await runLogin(options);
   });
 

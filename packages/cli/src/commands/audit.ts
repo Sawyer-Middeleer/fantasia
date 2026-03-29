@@ -1,5 +1,5 @@
-import { ensureFreshToken } from "../credentials.js";
-import { fetchHubSpotContacts } from "@fantasia/integrations/hubspot";
+import { getAttioTokens } from "../credentials.js";
+import { fetchAttioContacts } from "@fantasia/integrations/attio";
 import { runAudit as runCrmAudit } from "@fantasia/integrations/audit";
 import type { AuditResult, AuditIssue } from "@fantasia/integrations/audit";
 
@@ -44,17 +44,17 @@ export async function runAudit(options: {
 }): Promise<void> {
   const chalk = (await import("chalk")).default;
 
-  const tokens = await ensureFreshToken();
+  const tokens = getAttioTokens();
   if (!tokens) {
     console.error(
-      chalk.red("Not logged in. Run `fantasia login --hubspot` first.")
+      chalk.red("Not logged in. Run `fantasia login` first.")
     );
     process.exit(1);
   }
 
   console.log(chalk.dim("Fetching contacts..."));
 
-  const contacts = await fetchHubSpotContacts(tokens.access_token);
+  const contacts = await fetchAttioContacts(tokens.access_token);
 
   console.log(chalk.dim(`Running audit on ${contacts.length} contacts...`));
 
@@ -159,7 +159,7 @@ export async function runAudit(options: {
   console.log();
   console.log(
     chalk.dim(
-      `  ${result.totalRecords} records scanned | Portal ${tokens.portal_id}`
+      `  ${result.totalRecords} records scanned | ${tokens.workspace_name}`
     )
   );
   console.log();

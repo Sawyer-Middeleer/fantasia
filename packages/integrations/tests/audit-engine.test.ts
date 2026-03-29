@@ -80,7 +80,7 @@ describe("Audit Engine", () => {
           company: "X",
           jobtitle: "T",
           phone: "123",
-          hs_last_activity_date: null,
+          last_activity_date: null,
           notes_last_updated: null,
           createdate: null,
         },
@@ -92,7 +92,7 @@ describe("Audit Engine", () => {
           company: "Y",
           jobtitle: "T",
           phone: "456",
-          hs_last_activity_date: null,
+          last_activity_date: null,
           notes_last_updated: null,
           createdate: null,
         },
@@ -197,7 +197,7 @@ describe("Audit Engine", () => {
           company: `Company ${companyNum}`,
           jobtitle: "Role",
           phone: `(555) ${String(i).padStart(3, "0")}-${String(i + 1000).padStart(4, "0")}`,
-          hs_last_activity_date: null,
+          last_activity_date: null,
           notes_last_updated: null,
           createdate: null,
         });
@@ -213,11 +213,11 @@ describe("Audit Engine", () => {
   describe("Format — Apostrophe and special name handling", () => {
     it("does not flag O'Brien as format inconsistency", () => {
       const nameContacts: CrmContact[] = [
-        { id: "1", email: "a@x.com", firstname: "O'Brien", lastname: "Smith", company: "X", jobtitle: "T", phone: "(555) 111-2222", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "2", email: "b@x.com", firstname: "Alice", lastname: "Johnson", company: "X", jobtitle: "T", phone: "(555) 222-3333", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "3", email: "c@x.com", firstname: "Bob", lastname: "Williams", company: "X", jobtitle: "T", phone: "(555) 333-4444", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "4", email: "d@x.com", firstname: "Charlie", lastname: "O'Malley", company: "X", jobtitle: "T", phone: "(555) 444-5555", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "5", email: "e@x.com", firstname: "Diana", lastname: "Prince", company: "X", jobtitle: "T", phone: "(555) 555-6666", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "1", email: "a@x.com", firstname: "O'Brien", lastname: "Smith", company: "X", jobtitle: "T", phone: "(555) 111-2222", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "2", email: "b@x.com", firstname: "Alice", lastname: "Johnson", company: "X", jobtitle: "T", phone: "(555) 222-3333", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "3", email: "c@x.com", firstname: "Bob", lastname: "Williams", company: "X", jobtitle: "T", phone: "(555) 333-4444", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "4", email: "d@x.com", firstname: "Charlie", lastname: "O'Malley", company: "X", jobtitle: "T", phone: "(555) 444-5555", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "5", email: "e@x.com", firstname: "Diana", lastname: "Prince", company: "X", jobtitle: "T", phone: "(555) 555-6666", last_activity_date: null, notes_last_updated: null, createdate: null },
       ];
       const issues = detectFormatIssues(nameContacts);
       const affectedIds = issues.map((i) => i.record_id);
@@ -228,9 +228,9 @@ describe("Audit Engine", () => {
 
     it("does not flag hyphenated names like Smith-Jones", () => {
       const nameContacts: CrmContact[] = [
-        { id: "1", email: "a@x.com", firstname: "Mary", lastname: "Smith-Jones", company: "X", jobtitle: "T", phone: "(555) 111-2222", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "2", email: "b@x.com", firstname: "Alice", lastname: "Johnson", company: "X", jobtitle: "T", phone: "(555) 222-3333", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
-        { id: "3", email: "c@x.com", firstname: "Bob", lastname: "Williams", company: "X", jobtitle: "T", phone: "(555) 333-4444", hs_last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "1", email: "a@x.com", firstname: "Mary", lastname: "Smith-Jones", company: "X", jobtitle: "T", phone: "(555) 111-2222", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "2", email: "b@x.com", firstname: "Alice", lastname: "Johnson", company: "X", jobtitle: "T", phone: "(555) 222-3333", last_activity_date: null, notes_last_updated: null, createdate: null },
+        { id: "3", email: "c@x.com", firstname: "Bob", lastname: "Williams", company: "X", jobtitle: "T", phone: "(555) 333-4444", last_activity_date: null, notes_last_updated: null, createdate: null },
       ];
       const issues = detectFormatIssues(nameContacts);
       const affectedIds = issues.map((i) => i.record_id);
@@ -260,7 +260,7 @@ describe("Audit Engine", () => {
           company: "OldCorp",
           jobtitle: "Manager",
           phone: "(555) 000-0000",
-          hs_last_activity_date: daysAgo(800), // > 2 years ago
+          last_activity_date: daysAgo(800), // > 2 years ago
           notes_last_updated: null,
           createdate: daysAgo(900),
         },

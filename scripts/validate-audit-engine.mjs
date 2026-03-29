@@ -45,7 +45,7 @@ function toCrmContact(row) {
     company: row['Company Name']?.trim() || null,
     jobtitle: row['Job Title']?.trim() || null,
     phone: row['Phone Number']?.trim() || null,
-    hs_last_activity_date: lastActivity || null,
+    last_activity_date: lastActivity || null,
     notes_last_updated: null,
     createdate,
     _notes: row['Notes']?.trim() || '', // ground truth marker
@@ -173,7 +173,7 @@ function detectStaleRecords(contacts) {
       const createdAt = new Date(c.createdate).getTime();
       if (now - createdAt < thresholdMs) continue;
     }
-    const lastActivity = c.hs_last_activity_date ? new Date(c.hs_last_activity_date).getTime() : null;
+    const lastActivity = c.last_activity_date ? new Date(c.last_activity_date).getTime() : null;
     const lastNotes = c.notes_last_updated ? new Date(c.notes_last_updated).getTime() : null;
     const mostRecent = Math.max(lastActivity ?? 0, lastNotes ?? 0);
     if (mostRecent === 0 || now - mostRecent > thresholdMs) {
@@ -437,7 +437,7 @@ const largeClusters = dupIssues.filter(i => i.details.cluster_size > 2);
 console.log(`  Duplicate clusters with 3+ members: ${largeClusters.length}`);
 
 // 5. Contacts that have NO activity date AND no createdate
-const noActivity = contacts.filter(c => !c.hs_last_activity_date && !c.notes_last_updated);
+const noActivity = contacts.filter(c => !c.last_activity_date && !c.notes_last_updated);
 console.log(`  Contacts with no activity date at all: ${noActivity.length}`);
 
 // 6. Phone number formats distribution

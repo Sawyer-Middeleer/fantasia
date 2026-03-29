@@ -1,12 +1,5 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  transpilePackages: [
-    "@fantasia/integrations",
-    "@fantasia/backend",
-    "@fantasia/auth",
-    "@fantasia/billing",
-  ],
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

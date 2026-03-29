@@ -8,7 +8,7 @@ export interface MergePreview {
 export interface MergeCluster {
   /** The auditIssue ID this cluster came from */
   issueId: string;
-  /** HubSpot contact IDs in this duplicate cluster */
+  /** CRM record IDs in this duplicate cluster */
   contactIds: string[];
   /** Which contact to keep (the "primary") */
   keepId: string;

@@ -10,10 +10,7 @@
   },
   "references": [
     { "path": "apps/web" },
-    { "path": "packages/backend" },
     { "path": "packages/integrations" },
-    { "path": "packages/auth" },
-    { "path": "packages/billing" },
     { "path": "packages/cli" }
   ],
   "files": []

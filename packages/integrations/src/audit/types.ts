@@ -8,7 +8,7 @@ export interface CrmContact {
   company: string | null;
   jobtitle: string | null;
   phone: string | null;
-  hs_last_activity_date: string | null;
+  last_activity_date: string | null;
   notes_last_updated: string | null;
   createdate: string | null;
 }

@@ -1,11 +1,11 @@
 // Format normalization engine: fix phone numbers and name casing
 
-import { Client } from "@hubspot/api-client";
+import { getAttioRecord, updateAttioRecord } from "../attio/client";
 import { NormalizePreview, NormalizeChange, FixSnapshot, SnapshotEntry } from "./types";
 
 interface AuditIssueRecord {
   _id: string;
-  hubspotRecordIds: string[];
+  recordIds: string[];
   details: Record<string, unknown>;
 }
 
@@ -51,26 +51,21 @@ function normalizePhone(phone: string): string {
  */
 export async function buildNormalizePreview(
   issues: AuditIssueRecord[],
-  hubspotClient: Client
+  apiKey: string
 ): Promise<NormalizePreview> {
   const changes: NormalizeChange[] = [];
 
   for (const issue of issues) {
-    const contactId = issue.hubspotRecordIds[0];
+    const contactId = issue.recordIds[0];
     if (!contactId) continue;
 
     const issueList = (issue.details.issues as string[]) ?? [];
     if (issueList.length === 0) continue;
 
-    // Fetch current values from HubSpot
+    // Fetch current values from Attio
     let currentProps: Record<string, string | null>;
     try {
-      const resp = await hubspotClient.crm.contacts.basicApi.getById(contactId, [
-        "firstname",
-        "lastname",
-        "phone",
-      ]);
-      currentProps = resp.properties as Record<string, string | null>;
+      currentProps = await getAttioRecord(apiKey, contactId);
     } catch {
       continue;
     }
@@ -111,12 +106,12 @@ export async function buildNormalizePreview(
 }
 
 /**
- * Execute format normalization: update contacts in HubSpot.
+ * Execute format normalization: update contacts in Attio.
  * Returns a snapshot for undo.
  */
 export async function executeNormalize(
   preview: NormalizePreview,
-  hubspotClient: Client
+  apiKey: string
 ): Promise<FixSnapshot> {
   const entries: SnapshotEntry[] = [];
 
@@ -134,9 +129,7 @@ export async function executeNormalize(
       updateProps[f.field] = f.newValue;
     }
 
-    await hubspotClient.crm.contacts.basicApi.update(change.contactId, {
-      properties: updateProps,
-    });
+    await updateAttioRecord(apiKey, change.contactId, updateProps);
   }
 
   return {
@@ -155,7 +148,7 @@ export function buildMockNormalizePreview(
   const changes: NormalizeChange[] = [];
 
   for (const issue of issues) {
-    const contactId = issue.hubspotRecordIds[0];
+    const contactId = issue.recordIds[0];
     if (!contactId) continue;
 
     const issueList = (issue.details.issues as string[]) ?? [];

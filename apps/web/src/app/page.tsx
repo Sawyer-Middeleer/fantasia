@@ -69,7 +69,7 @@ export default function Home() {
             label="Available now"
             title="CRM Audit & Fix"
             command="fantasia audit"
-            description="Connect HubSpot or Attio. Surface duplicates, stale records, missing fields, and format issues. Preview fixes, then execute — all from the terminal."
+            description="Connect your Attio CRM. Surface duplicates, stale records, missing fields, and format issues. Preview fixes, then execute — all from the terminal."
           />
           <ToolCard
             label="Available now"

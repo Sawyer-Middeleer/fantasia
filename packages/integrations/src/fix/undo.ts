@@ -1,16 +1,16 @@
 // Undo engine: restore original values from fix snapshots
 
-import { Client } from "@hubspot/api-client";
+import { updateAttioRecord } from "../attio/client";
 import { FixSnapshot } from "./types";
 
 /**
  * Restore original contact values from a fix snapshot.
  * For merge operations, we can only restore field values on the primary contact
- * (merged contacts cannot be un-merged via API).
+ * (deleted contacts cannot be un-deleted via API).
  */
 export async function executeUndo(
   snapshot: FixSnapshot,
-  hubspotClient: Client
+  apiKey: string
 ): Promise<{ restored: number; skipped: number }> {
   let restored = 0;
   let skipped = 0;
@@ -35,9 +35,7 @@ export async function executeUndo(
     }
 
     try {
-      await hubspotClient.crm.contacts.basicApi.update(entry.contactId, {
-        properties: props,
-      });
+      await updateAttioRecord(apiKey, entry.contactId, props);
       restored++;
     } catch {
       // Contact may have been deleted (e.g., merged contact)

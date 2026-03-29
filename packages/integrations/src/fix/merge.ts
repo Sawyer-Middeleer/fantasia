@@ -1,11 +1,11 @@
-// Duplicate merge engine: preview what will be merged, execute via HubSpot API
+// Duplicate merge engine: preview what will be merged, execute via Attio API
 
-import { Client } from "@hubspot/api-client";
+import { getAttioRecord, updateAttioRecord } from "../attio/client";
 import { MergeCluster, MergePreview, FixSnapshot, SnapshotEntry } from "./types";
 
 interface AuditIssueRecord {
   _id: string;
-  hubspotRecordIds: string[];
+  recordIds: string[];
   details: Record<string, unknown>;
 }
 
@@ -24,22 +24,22 @@ const MERGEABLE_FIELDS = [
  */
 export async function buildMergePreview(
   issues: AuditIssueRecord[],
-  hubspotClient: Client
+  apiKey: string
 ): Promise<MergePreview> {
   const clusters: MergeCluster[] = [];
 
   for (const issue of issues) {
-    const clusterIds = (issue.details.cluster_ids as string[]) ?? issue.hubspotRecordIds;
+    const clusterIds = (issue.details.cluster_ids as string[]) ?? issue.recordIds;
     if (!clusterIds || clusterIds.length < 2) continue;
 
-    // Fetch current contact data from HubSpot
+    // Fetch current contact data from Attio
     const contacts = await Promise.all(
       clusterIds.map(async (id) => {
         try {
-          const resp = await hubspotClient.crm.contacts.basicApi.getById(id, MERGEABLE_FIELDS as unknown as string[]);
-          return { id, properties: resp.properties };
+          const properties = await getAttioRecord(apiKey, id);
+          return { id, properties };
         } catch {
-          return { id, properties: {} as Record<string, string> };
+          return { id, properties: {} as Record<string, string | null> };
         }
       })
     );
@@ -96,13 +96,12 @@ export async function buildMergePreview(
 }
 
 /**
- * Execute the merge: update primary with merged fields, then use HubSpot merge API.
+ * Execute the merge: update primary with merged fields, then delete secondaries.
  * Returns a snapshot for undo.
  */
 export async function executeMerge(
   preview: MergePreview,
-  hubspotClient: Client,
-  accessToken: string
+  apiKey: string
 ): Promise<FixSnapshot> {
   const entries: SnapshotEntry[] = [];
 
@@ -110,16 +109,12 @@ export async function executeMerge(
     // Snapshot all contacts before merge
     for (const contactId of cluster.contactIds) {
       try {
-        const resp = await hubspotClient.crm.contacts.basicApi.getById(
-          contactId,
-          MERGEABLE_FIELDS as unknown as string[]
-        );
+        const props = await getAttioRecord(apiKey, contactId);
         entries.push({
           contactId,
-          originalValues: { ...resp.properties },
+          originalValues: props,
         });
       } catch {
-        // Contact may not exist; snapshot what we can
         entries.push({ contactId, originalValues: {} });
       }
     }
@@ -130,25 +125,18 @@ export async function executeMerge(
       for (const [field, info] of Object.entries(cluster.mergedFields)) {
         updateProps[field] = info.value;
       }
-      await hubspotClient.crm.contacts.basicApi.update(cluster.keepId, {
-        properties: updateProps,
-      });
+      await updateAttioRecord(apiKey, cluster.keepId, updateProps);
     }
 
-    // Merge secondary contacts into primary via HubSpot merge API
+    // Delete secondary records via Attio API
     for (const mergeId of cluster.mergeIds) {
-      // HubSpot merge: POST /crm/v3/objects/contacts/merge
-      await fetch("https://api.hubapi.com/crm/v3/objects/contacts/merge", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          primaryObjectId: cluster.keepId,
-          objectIdToMerge: mergeId,
-        }),
-      });
+      await fetch(
+        `https://api.attio.com/v2/objects/people/records/${mergeId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }
+      );
     }
   }
 
@@ -160,7 +148,7 @@ export async function executeMerge(
 }
 
 /**
- * Build a mock merge preview for demo mode (no HubSpot API calls).
+ * Build a mock merge preview for demo mode (no API calls).
  */
 export function buildMockMergePreview(
   issues: AuditIssueRecord[]
@@ -168,7 +156,7 @@ export function buildMockMergePreview(
   const clusters: MergeCluster[] = [];
 
   for (const issue of issues) {
-    const clusterIds = (issue.details.cluster_ids as string[]) ?? issue.hubspotRecordIds;
+    const clusterIds = (issue.details.cluster_ids as string[]) ?? issue.recordIds;
     if (!clusterIds || clusterIds.length < 2) continue;
 
     const keepId = clusterIds[0];

@@ -1,6 +1,6 @@
 import readline from "readline";
-import { ensureFreshToken } from "../credentials.js";
-import { fetchHubSpotContacts, getHubSpotClient } from "@fantasia/integrations/hubspot";
+import { getAttioTokens } from "../credentials.js";
+import { fetchAttioContacts } from "@fantasia/integrations/attio";
 import { runAudit as runCrmAudit } from "@fantasia/integrations/audit";
 import {
   buildMergePreview,
@@ -31,16 +31,16 @@ export async function runFix(options: {
 }): Promise<void> {
   const chalk = (await import("chalk")).default;
 
-  const tokens = await ensureFreshToken();
+  const tokens = getAttioTokens();
   if (!tokens) {
     console.error(
-      chalk.red("Not logged in. Run `fantasia login --hubspot` first.")
+      chalk.red("Not logged in. Run `fantasia login` first.")
     );
     process.exit(1);
   }
 
   console.log(chalk.dim("Fetching contacts..."));
-  const contacts = await fetchHubSpotContacts(tokens.access_token);
+  const contacts = await fetchAttioContacts(tokens.access_token);
 
   console.log(chalk.dim(`Running audit on ${contacts.length} contacts...`));
   const auditResult = runCrmAudit({ contacts });
@@ -59,7 +59,7 @@ export async function runFix(options: {
     .filter((i) => i.category === "duplicate")
     .map((i) => ({
       _id: `${i.category}-${i.record_id}`,
-      hubspotRecordIds: [i.record_id],
+      recordIds: [i.record_id],
       details: i.details,
     }));
 
@@ -67,11 +67,11 @@ export async function runFix(options: {
     .filter((i) => i.category === "format")
     .map((i) => ({
       _id: `${i.category}-${i.record_id}`,
-      hubspotRecordIds: [i.record_id],
+      recordIds: [i.record_id],
       details: i.details,
     }));
 
-  const hubspotClient = getHubSpotClient(tokens.access_token);
+  const apiKey = tokens.access_token;
 
   console.log(chalk.dim("Building fix previews..."));
 
@@ -79,11 +79,11 @@ export async function runFix(options: {
   let normalizePreview: NormalizePreview | null = null;
 
   if (duplicateIssues.length > 0) {
-    mergePreview = await buildMergePreview(duplicateIssues, hubspotClient);
+    mergePreview = await buildMergePreview(duplicateIssues, apiKey);
   }
 
   if (formatIssues.length > 0) {
-    normalizePreview = await buildNormalizePreview(formatIssues, hubspotClient);
+    normalizePreview = await buildNormalizePreview(formatIssues, apiKey);
   }
 
   const totalFixes =
@@ -189,11 +189,7 @@ export async function runFix(options: {
   const results: { mergeSnapshot?: unknown; normalizeSnapshot?: unknown } = {};
 
   if (mergePreview && mergePreview.clusters.length > 0) {
-    const snapshot = await executeMerge(
-      mergePreview,
-      hubspotClient,
-      tokens.access_token
-    );
+    const snapshot = await executeMerge(mergePreview, apiKey);
     results.mergeSnapshot = snapshot;
     if (!options.json) {
       console.log(
@@ -205,7 +201,7 @@ export async function runFix(options: {
   }
 
   if (normalizePreview && normalizePreview.changes.length > 0) {
-    const snapshot = await executeNormalize(normalizePreview, hubspotClient);
+    const snapshot = await executeNormalize(normalizePreview, apiKey);
     results.normalizeSnapshot = snapshot;
     if (!options.json) {
       console.log(

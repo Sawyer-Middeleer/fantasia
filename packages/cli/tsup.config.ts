@@ -11,6 +11,5 @@ export default defineConfig({
   banner: {
     js: "#!/usr/bin/env node",
   },
-  external: ["@hubspot/api-client"],
   noExternal: ["@fantasia/integrations"],
 });

@@ -14,8 +14,8 @@ export function detectStaleRecords(contacts: CrmContact[]): AuditIssue[] {
       if (now - createdAt < thresholdMs) continue;
     }
 
-    const lastActivity = c.hs_last_activity_date
-      ? new Date(c.hs_last_activity_date).getTime()
+    const lastActivity = c.last_activity_date
+      ? new Date(c.last_activity_date).getTime()
       : null;
     const lastNotes = c.notes_last_updated
       ? new Date(c.notes_last_updated).getTime()
@@ -25,11 +25,11 @@ export function detectStaleRecords(contacts: CrmContact[]): AuditIssue[] {
 
     // Build data quality notes for date issues
     const dataQualityNotes: string[] = [];
-    if (!c.hs_last_activity_date && !c.notes_last_updated) {
+    if (!c.last_activity_date && !c.notes_last_updated) {
       dataQualityNotes.push("No activity dates on record — may indicate a data import without engagement history");
     } else {
-      if (!c.hs_last_activity_date) {
-        dataQualityNotes.push("Missing hs_last_activity_date — activity tracking may not be configured");
+      if (!c.last_activity_date) {
+        dataQualityNotes.push("Missing last_activity_date — activity tracking may not be configured");
       }
       if (!c.notes_last_updated) {
         dataQualityNotes.push("Missing notes_last_updated — no notes have been logged");
@@ -57,7 +57,7 @@ export function detectStaleRecords(contacts: CrmContact[]): AuditIssue[] {
         record_id: c.id,
         details: {
           days_since_activity: daysSinceActivity,
-          last_activity_date: c.hs_last_activity_date,
+          last_activity_date: c.last_activity_date,
           last_notes_updated: c.notes_last_updated,
           contact_name: [c.firstname, c.lastname].filter(Boolean).join(" "),
           contact_email: c.email,

@@ -35,9 +35,11 @@ next-env.d.ts
 # package managers
 package-lock.json
 
-# HubSpot config file
-hubspot.config.yml
-
 # Private business docs
 private/
 docs/outreach-*
+
+.vercel
+
+.vercel
+.env*.local

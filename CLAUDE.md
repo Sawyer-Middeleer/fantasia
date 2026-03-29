@@ -1,29 +1,24 @@
 # Fantasia
 
-Collection of micro apps for running a business. Bun monorepo, TypeScript throughout.
+Collection of micro tools for running a business. Bun monorepo, TypeScript throughout.
 
 ## Architecture
 
-- `apps/web` — Next.js 15 dashboard + API routes (Vercel)
-- `packages/cli` — CLI tool published as `fantasia` on npm (Commander.js)
-- `packages/integrations` — Core audit/fix engine + HubSpot/Attio clients (framework-agnostic)
-- `packages/backend` — Convex functions + schema (serverless DB)
-- `packages/auth` — Password hashing (bcrypt) + JWT sessions
-- `packages/billing` — Stripe plans + webhook handling
+- `apps/web` — Next.js 15 static marketing site (Vercel)
+- `packages/cli` — CLI tool published as `fantasia-sh` on npm (Commander.js)
+- `packages/integrations` — Core audit/fix engine + Attio client (framework-agnostic)
 
 ## Key patterns
 
 - Audit engine is pure functions: `runAudit(contacts) → AuditResult`. No side effects, no CRM calls inside.
-- HubSpot client handles OAuth refresh automatically (5-min buffer before expiry).
-- Fix operations always preview first, then execute. Snapshots stored for 30-day undo.
-- API routes use Convex session tokens (httpOnly cookies). Rate limiting is in-memory.
+- Attio authenticates via API key (Bearer token). No OAuth.
+- Fix operations always preview first, then execute.
 - CLI stores credentials in `~/.fantasia/credentials.json`.
 
 ## Commands
 
 ```bash
 bun run dev          # Next.js dev server
-bun run dev:convex   # Convex dev backend
 bun run build:cli    # Build CLI package
 bun run test         # Run all tests
 bun run typecheck    # Typecheck all packages

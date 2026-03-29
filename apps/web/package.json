@@ -7,16 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "jest",
-    "test:watch": "jest --watch",
+    "test": "jest --passWithNoTests",
+    "test:watch": "jest --passWithNoTests --watch",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fantasia/auth": "workspace:*",
-    "@fantasia/backend": "workspace:*",
-    "@fantasia/billing": "workspace:*",
-    "@fantasia/integrations": "workspace:*",
-    "convex": "^1.33.0",
     "next": "15.5.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

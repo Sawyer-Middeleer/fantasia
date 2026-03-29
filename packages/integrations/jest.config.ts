@@ -3,12 +3,9 @@ import type { Config } from "jest";
 const config: Config = {
   preset: "ts-jest",
   testEnvironment: "node",
-  roots: ["<rootDir>/src"],
+  roots: ["<rootDir>/tests"],
   transform: {
     "^.+\\.tsx?$": ["ts-jest", { tsconfig: { module: "commonjs" } }],
-  },
-  moduleNameMapper: {
-    "^(\\.{1,2}/.*)\\.js$": "$1",
   },
 };
 
