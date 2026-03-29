@@ -4,31 +4,31 @@ import "./globals.css";
 const siteUrl = "https://fantasia.sh";
 
 export const metadata: Metadata = {
-  title: "Fantasia — CLI-first CRM audit & fix",
+  title: "Fantasia — micro tools for running a business",
   description:
-    "Audit your CRM health and fix data issues from the command line.",
+    "An open-source collection of CLI tools for building and running a business. Starting with CRM data hygiene.",
   metadataBase: new URL(siteUrl),
   openGraph: {
     type: "website",
     url: siteUrl,
     siteName: "Fantasia",
-    title: "Fantasia — CLI-first CRM audit & fix",
+    title: "Fantasia — micro tools for running a business",
     description:
-      "Audit your CRM health and fix data issues from the command line.",
+      "An open-source collection of CLI tools for building and running a business. Starting with CRM data hygiene.",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "Fantasia — CLI-first CRM audit & fix",
+        alt: "Fantasia — micro tools for running a business",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Fantasia — CLI-first CRM audit & fix",
+    title: "Fantasia — micro tools for running a business",
     description:
-      "Audit your CRM health and fix data issues from the command line.",
+      "An open-source collection of CLI tools for building and running a business. Starting with CRM data hygiene.",
     images: ["/og-image.png"],
   },
   robots: {

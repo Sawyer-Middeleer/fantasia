@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Fantasia — CLI-first CRM audit & fix";
+export const alt = "Fantasia — micro tools for running a business";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -54,7 +54,7 @@ export default function OgImage() {
               lineHeight: 1.05,
             }}
           >
-            <span>CLI-first CRM audit &amp; fix</span>
+            <span>Micro tools for running a business.</span>
           </div>
 
           {/* Subhead */}
@@ -68,8 +68,8 @@ export default function OgImage() {
               gap: 4,
             }}
           >
-            <span>Audit your CRM health and fix data issues</span>
-            <span>from the command line.</span>
+            <span>Open source CLI tools that solve real problems.</span>
+            <span>Starting with CRM data hygiene.</span>
           </div>
         </div>
 
@@ -81,11 +81,11 @@ export default function OgImage() {
             background: "#00e5a0",
             borderRadius: 10,
             padding: "14px 28px",
-            width: 260,
+            width: 300,
           }}
         >
           <span style={{ color: "#020d07", fontSize: 20, fontWeight: 700 }}>
-            npx fantasia
+            npx fantasia-sh
           </span>
         </div>
       </div>

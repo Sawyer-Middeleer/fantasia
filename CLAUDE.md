@@ -32,5 +32,4 @@ bun run typecheck    # Typecheck all packages
 ## Conventions
 
 - This is a public open-source repo. Never commit secrets, real PII, or API keys.
-- Keep `docs/` for technical docs only. No outreach lists, email templates, or business strategy docs.
 - Test data in `test-data/` must be synthetic.

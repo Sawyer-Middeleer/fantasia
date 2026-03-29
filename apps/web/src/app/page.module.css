@@ -79,27 +79,35 @@
 }
 
 /* ——— Skills ——— */
-.skills {
+.tools {
   padding: 4rem 0;
   border-top: 1px solid #e0e0e0;
 }
 
-.skillsHeading {
+.toolsHeading {
   font-size: 1.75rem;
   font-weight: 700;
   color: #111111;
   text-align: center;
-  margin: 0 0 2.5rem;
+  margin: 0 0 0.75rem;
   letter-spacing: -0.03em;
 }
 
-.skillGrid {
+.toolsIntro {
+  font-size: 1rem;
+  color: #666666;
+  text-align: center;
+  margin: 0 0 2.5rem;
+  line-height: 1.6;
+}
+
+.toolGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 1.25rem;
 }
 
-.skillCard {
+.toolCard {
   border: 1px solid #e0e0e0;
   border-radius: 10px;
   padding: 1.75rem;
@@ -109,7 +117,20 @@
   gap: 0.5rem;
 }
 
-.skillTitle {
+.toolCardFeatured {
+  grid-column: 1 / -1;
+}
+
+.toolLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #888888;
+  margin: 0;
+}
+
+.toolTitle {
   font-size: 1.1rem;
   font-weight: 700;
   color: #111111;
@@ -117,7 +138,7 @@
   letter-spacing: -0.02em;
 }
 
-.skillCommand {
+.toolCommand {
   font-family: "Courier New", Courier, monospace;
   font-size: 0.85rem;
   color: #333333;
@@ -127,7 +148,7 @@
   width: fit-content;
 }
 
-.skillDescription {
+.toolDescription {
   font-size: 0.9rem;
   color: #666666;
   margin: 0;
@@ -159,6 +180,24 @@
   color: #111111;
 }
 
+.attribution {
+  font-size: 0.8rem;
+  color: #999999;
+  margin: 0;
+}
+
+.attribution a {
+  color: #777777;
+  text-decoration: underline;
+  text-decoration-color: #cccccc;
+  text-underline-offset: 2px;
+  transition: color 0.15s;
+}
+
+.attribution a:hover {
+  color: #111111;
+}
+
 .copyright {
   font-size: 0.8rem;
   color: #999999;
@@ -171,7 +210,7 @@
     padding: 3rem 0 2rem;
   }
 
-  .skillGrid {
+  .toolGrid {
     grid-template-columns: 1fr;
   }
 

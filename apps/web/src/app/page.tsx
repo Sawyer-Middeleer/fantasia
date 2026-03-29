@@ -2,20 +2,27 @@ import styles from "./page.module.css";
 import { TerminalDemo } from "@/components/TerminalDemo";
 import { InstallCommand } from "@/components/InstallCommand";
 
-function SkillCard({
+function ToolCard({
   title,
   command,
   description,
+  label,
+  featured,
 }: {
   title: string;
   command: string;
   description: string;
+  label?: string;
+  featured?: boolean;
 }) {
   return (
-    <div className={styles.skillCard}>
-      <h3 className={styles.skillTitle}>{title}</h3>
-      <code className={styles.skillCommand}>{command}</code>
-      <p className={styles.skillDescription}>{description}</p>
+    <div
+      className={`${styles.toolCard}${featured ? ` ${styles.toolCardFeatured}` : ""}`}
+    >
+      {label && <p className={styles.toolLabel}>{label}</p>}
+      <h3 className={styles.toolTitle}>{title}</h3>
+      <code className={styles.toolCommand}>{command}</code>
+      <p className={styles.toolDescription}>{description}</p>
     </div>
   );
 }
@@ -36,11 +43,12 @@ export default function Home() {
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Fantasia</h1>
         <p className={styles.subtitle}>
-          CRM data enrichment &amp; hygiene for AI agents and developers.
+          Micro tools for building and running a business.
         </p>
         <p className={styles.description}>
-          Connect HubSpot or Attio. Find duplicates, stale records, missing
-          fields. Fix them — all from the CLI.
+          An open-source, growing collection of small CLI tools that solve real
+          problems — starting with CRM data hygiene. Built by a consultancy
+          that needed them.
         </p>
         <InstallCommand />
       </section>
@@ -49,28 +57,31 @@ export default function Home() {
         <TerminalDemo />
       </section>
 
-      <section className={styles.skills}>
-        <h2 className={styles.skillsHeading}>Built-in skills</h2>
-        <div className={styles.skillGrid}>
-          <SkillCard
-            title="Login"
-            command="fantasia login --hubspot"
-            description="Connect your CRM in seconds. HubSpot and Attio supported."
-          />
-          <SkillCard
-            title="Audit"
+      <section className={styles.tools}>
+        <h2 className={styles.toolsHeading}>Tools</h2>
+        <p className={styles.toolsIntro}>
+          Each tool is a focused CLI utility that does one thing well. The
+          collection grows as we hit new problems.
+        </p>
+        <div className={styles.toolGrid}>
+          <ToolCard
+            featured
+            label="Available now"
+            title="CRM Audit & Fix"
             command="fantasia audit"
-            description="Health checks across duplicates, stale records, missing fields, and formatting."
+            description="Connect HubSpot or Attio. Surface duplicates, stale records, missing fields, and format issues. Preview fixes, then execute — all from the terminal."
           />
-          <SkillCard
-            title="Fix"
-            command="fantasia fix"
-            description="Merge duplicates and normalize formats. Preview first, execute when ready."
+          <ToolCard
+            label="Available now"
+            title="Connection Status"
+            command="fantasia status"
+            description="Check which integrations are connected and their health. JSON output for automation."
           />
-          <SkillCard
-            title="Status"
-            command="fantasia status --json"
-            description="Dual output for humans and AI agents. Structured JSON for automation."
+          <ToolCard
+            label="In progress"
+            title="More tools"
+            command="fantasia --help"
+            description="This is an active experiment. New tools get added when we hit a problem worth solving. Watch the repo."
           />
         </div>
       </section>
@@ -83,7 +94,11 @@ export default function Home() {
             Docs
           </a>
         </div>
-        <p className={styles.copyright}>&copy; 2026 Fantasia</p>
+        <p className={styles.attribution}>
+          Built by{" "}
+          <a href="https://www.revi.systems">Revi Systems</a>
+        </p>
+        <p className={styles.copyright}>&copy; 2026 Fantasia. MIT Licensed.</p>
       </footer>
     </div>
   );

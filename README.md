@@ -1,6 +1,6 @@
 # fantasia
 
-A collection of micro apps and tools I'm building to run [Revi Systems](https://github.com/sawyerm/Revi-Systems). Open source, experimental, opinionated.
+A collection of micro apps and tools I'm building to run [Revi Systems](https://www.revi.systems). Open source, experimental, opinionated.
 
 The idea: instead of buying a dozen SaaS tools, build small, focused utilities that do exactly what you need. Each "app" in this monorepo is a self-contained tool that solves a real problem I hit while building a business.
 

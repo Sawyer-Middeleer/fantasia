@@ -2,7 +2,26 @@
 
 import { useState } from "react";
 
-const humanOutput = `$ fantasia audit
+const helpOutput = `$ fantasia --help
+
+  fantasia v0.1.0
+  Micro tools for building and running a business.
+
+  Usage: fantasia <command> [options]
+
+  Commands:
+    audit     Run a CRM data-quality audit
+    fix       Preview and apply auto-fixes for CRM issues
+    login     Authenticate with a CRM integration
+    status    Show connection status for integrations
+
+  Options:
+    --help    Show help for any command
+    --json    Machine-readable output (most commands)
+
+  More tools coming. github.com/Sawyer-Middeleer/fantasia`;
+
+const auditOutput = `$ fantasia audit
 
   FANTASIA CRM AUDIT
 
@@ -17,20 +36,8 @@ const humanOutput = `$ fantasia audit
 
   3,847 records scanned | Portal 245538850`;
 
-const agentOutput = `{
-  "healthScore": 61,
-  "grade": "D",
-  "categories": {
-    "duplicates": { "score": 45, "affected": 127 },
-    "stale": { "score": 58, "affected": 89 },
-    "missingFields": { "score": 72, "affected": 56 },
-    "format": { "score": 69, "affected": 34 }
-  },
-  "totalRecords": 3847
-}`;
-
 export function TerminalDemo() {
-  const [tab, setTab] = useState<"human" | "agent">("human");
+  const [tab, setTab] = useState<"help" | "audit">("help");
 
   return (
     <div style={styles.terminal}>
@@ -45,26 +52,26 @@ export function TerminalDemo() {
       </div>
       <div style={styles.tabBar}>
         <button
-          onClick={() => setTab("human")}
+          onClick={() => setTab("help")}
           style={{
             ...styles.tab,
-            ...(tab === "human" ? styles.tabActive : {}),
+            ...(tab === "help" ? styles.tabActive : {}),
           }}
         >
-          Human
+          --help
         </button>
         <button
-          onClick={() => setTab("agent")}
+          onClick={() => setTab("audit")}
           style={{
             ...styles.tab,
-            ...(tab === "agent" ? styles.tabActive : {}),
+            ...(tab === "audit" ? styles.tabActive : {}),
           }}
         >
-          Agent (JSON)
+          audit
         </button>
       </div>
       <pre style={styles.body}>
-        {tab === "human" ? humanOutput : agentOutput}
+        {tab === "help" ? helpOutput : auditOutput}
       </pre>
     </div>
   );
