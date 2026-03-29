@@ -152,8 +152,8 @@ async function saveAttioApiKey(
     process.exit(1);
   }
 
-  const self = (await res.json()) as { data: { workspace: { id: string; name: string } } };
-  const workspace = self.data.workspace;
+  const self = (await res.json()) as Record<string, unknown>;
+  const workspace = ((self.data ?? self) as Record<string, unknown>).workspace as { id: string; name: string };
 
   saveAttioTokens({
     access_token: apiKey,
@@ -238,8 +238,8 @@ async function loginAttioOAuth(chalk: typeof import("chalk").default) {
     const selfRes = await fetch("https://api.attio.com/v2/self", {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
-    const self = (await selfRes.json()) as { data: { workspace: { id: string; name: string } } };
-    const workspace = self.data.workspace;
+    const self = (await selfRes.json()) as Record<string, unknown>;
+    const workspace = ((self.data ?? self) as Record<string, unknown>).workspace as { id: string; name: string };
 
     saveAttioTokens({
       access_token: tokens.access_token,
