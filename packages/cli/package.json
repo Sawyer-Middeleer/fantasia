@@ -17,11 +17,17 @@
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
+    "@fantasia/connector-attio": "workspace:*",
+    "@fantasia/crm-audit": "workspace:*",
+    "@fantasia/crm-fix": "workspace:*",
     "chalk": "^5.3.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@types/jest": "^29",
     "@types/node": "^22",
+    "jest": "^29",
+    "ts-jest": "^29",
     "tsup": "^8.3.0",
     "typescript": "^5"
   },

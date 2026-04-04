@@ -1,7 +1,7 @@
 import { getAttioTokens } from "../credentials.js";
-import { fetchAttioContacts } from "@fantasia/integrations/attio";
-import { runAudit as runCrmAudit } from "@fantasia/integrations/audit";
-import type { AuditResult, AuditIssue } from "@fantasia/integrations/audit";
+import { fetchAttioContacts } from "@fantasia/connector-attio";
+import { runAudit as runCrmAudit } from "@fantasia/crm-audit";
+import type { AuditResult, AuditIssue } from "@fantasia/crm-audit";
 
 function renderBar(score: number, width = 20): string {
   const filled = Math.round((score / 100) * width);

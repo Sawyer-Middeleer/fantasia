@@ -1,6 +1,6 @@
 // Undo engine: restore original values from fix snapshots
 
-import { updateAttioRecord } from "../attio/client";
+import { updateAttioRecord } from "@fantasia/connector-attio";
 import { FixSnapshot } from "./types";
 
 /**

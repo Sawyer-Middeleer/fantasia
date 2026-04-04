@@ -1,14 +1,14 @@
 import readline from "readline";
 import { getAttioTokens } from "../credentials.js";
-import { fetchAttioContacts } from "@fantasia/integrations/attio";
-import { runAudit as runCrmAudit } from "@fantasia/integrations/audit";
+import { fetchAttioContacts } from "@fantasia/connector-attio";
+import { runAudit as runCrmAudit } from "@fantasia/crm-audit";
 import {
   buildMergePreview,
   executeMerge,
   buildNormalizePreview,
   executeNormalize,
-} from "@fantasia/integrations/fix";
-import type { MergePreview, NormalizePreview } from "@fantasia/integrations/fix";
+} from "@fantasia/crm-fix";
+import type { MergePreview, NormalizePreview } from "@fantasia/crm-fix";
 
 function askConfirmation(question: string): Promise<boolean> {
   const rl = readline.createInterface({
