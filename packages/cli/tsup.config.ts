@@ -11,5 +11,5 @@ export default defineConfig({
   banner: {
     js: "#!/usr/bin/env node",
   },
-  noExternal: ["@fantasia/integrations"],
+  noExternal: ["@fantasia/crm-audit", "@fantasia/crm-fix", "@fantasia/connector-attio"],
 });

@@ -10,7 +10,9 @@
   },
   "references": [
     { "path": "apps/web" },
-    { "path": "packages/integrations" },
+    { "path": "packages/crm-audit" },
+    { "path": "packages/crm-fix" },
+    { "path": "packages/connectors/attio" },
     { "path": "packages/cli" }
   ],
   "files": []

@@ -1,4 +1,4 @@
-import { CrmContact } from "../audit/types";
+import type { CrmContact } from "@fantasia/crm-audit";
 
 const ATTIO_BASE = "https://api.attio.com/v2";
 

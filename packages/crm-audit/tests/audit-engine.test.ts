@@ -7,8 +7,8 @@ import {
   computeCategoryScore,
   computeHealthScore,
   getMockContacts,
-} from "@fantasia/integrations/audit";
-import type { CrmContact } from "@fantasia/integrations/audit";
+} from "@fantasia/crm-audit";
+import type { CrmContact } from "@fantasia/crm-audit";
 
 describe("Audit Engine", () => {
   const contacts = getMockContacts();

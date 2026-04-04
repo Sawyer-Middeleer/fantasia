@@ -1,6 +1,6 @@
 // Duplicate merge engine: preview what will be merged, execute via Attio API
 
-import { getAttioRecord, updateAttioRecord } from "../attio/client";
+import { getAttioRecord, updateAttioRecord } from "@fantasia/connector-attio";
 import { MergeCluster, MergePreview, FixSnapshot, SnapshotEntry } from "./types";
 
 interface AuditIssueRecord {

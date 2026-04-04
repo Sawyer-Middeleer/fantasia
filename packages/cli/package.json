@@ -17,6 +17,9 @@
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
+    "@fantasia/connector-attio": "workspace:*",
+    "@fantasia/crm-audit": "workspace:*",
+    "@fantasia/crm-fix": "workspace:*",
     "chalk": "^5.3.0",
     "commander": "^12.1.0"
   },

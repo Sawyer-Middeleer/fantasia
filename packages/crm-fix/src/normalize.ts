@@ -1,6 +1,6 @@
 // Format normalization engine: fix phone numbers and name casing
 
-import { getAttioRecord, updateAttioRecord } from "../attio/client";
+import { getAttioRecord, updateAttioRecord } from "@fantasia/connector-attio";
 import { NormalizePreview, NormalizeChange, FixSnapshot, SnapshotEntry } from "./types";
 
 interface AuditIssueRecord {
@@ -11,7 +11,7 @@ interface AuditIssueRecord {
 
 /**
  * Convert a name string to Title Case.
- * Handles: "JOHN DOE" → "John Doe", "john doe" → "John Doe"
+ * Handles: "JOHN DOE" -> "John Doe", "john doe" -> "John Doe"
  */
 function toTitleCase(name: string): string {
   return name
