@@ -317,13 +317,15 @@ network could then read your files and send them out.
 
 | Field | Value |
 |---|---|
-| **sev** | medium |
+| **sev** | low |
 | **dim** | permissions |
-| **detect** | `[script]` argument-constraining Bash rules (e.g. `Bash(curl http://specific-site.com/ *)`) |
+| **detect** | `[script]` an argument-pinning Bash rule on a **network or destructive** command (e.g. `Bash(curl http://x/ *)`, `Bash(rm /tmp/ *)`). Plain convenience allows like `Bash(git fetch *)` or `Bash(mytool validate *)` are **not** flagged — the trailing `*` is normal there. |
 
-**Why it matters.** Argument constraints on Bash are bypassable. A rule like
-`Bash(curl http://x/ *)` can be circumvented by using HTTPS, a redirect, a
-variable, or a different flag ordering. It creates a false sense of security.
+**Why it matters.** Pinning a web address or path inside an allow rule looks like
+it limits the command, but those patterns slip past easily (HTTPS vs HTTP, a
+redirect, a shell variable, flag ordering). If someone is relying on it as a
+safety wall, it won't hold. As a convenience it's fine — just not a lock. Low
+severity: it's "worth knowing the principle," not an active hole.
 
 **Fix.** Don't rely on Bash argument rules for network control. Use
 `permissions.deny` to block curl/wget outright, and `WebFetch(domain:…)` for
@@ -426,18 +428,19 @@ step or require explicit confirmation via a `PreToolUse` hook.
 
 | Field | Value |
 |---|---|
-| **sev** | medium |
+| **sev** | info |
 | **dim** | permissions |
-| **detect** | `[script]` `PreToolUse` or `PostToolUse` hooks running shell commands |
+| **detect** | `[script]` a hook that runs a command at some event (`SessionStart`, `PreToolUse`, …). The scanner puts a short snippet of the actual command in the `evidence`, so it's shown, not "opaque". |
 
-**Why it matters.** Hooks run on every matching tool call. An opaque hook
-(a shell script whose behavior isn't visible in the settings) can silently allow,
-block, or log actions. This is a power feature, but it can also be a vector if
-the hook itself is compromised or behaves unexpectedly.
+**Why it matters.** A hook runs a command on its own when something happens —
+e.g. at startup or on a tool call — without asking each time. But it's written
+right in the settings, so it isn't hidden: the user can see exactly what it runs.
+Most are benign things they set up themselves (like loading a notes file at
+startup). This is purely informational — just worth a glance to confirm it's
+theirs.
 
-**Fix.** Surface what each hook does in a comment in the settings file. For teams
-that want predictable behavior, consider a `ConfigChange` hook pattern that
-requires sign-off before hooks change.
+**Fix.** Read the command shown. If it's recognised or self-installed, done. If
+not, remove it or check what it does.
 
 ---
 

@@ -960,20 +960,26 @@ function analyzeAllowRule(rule, scope, emit) {
       emit('env-runner-allowed', { file, line, evidence: evBase(`runner rule \`${rule}\``) });
       return;
     }
-    // fragile arg rule (constrains args but not a network/runner command)
-    if (/\s/.test(inner) && /[^*\s]\s+\S*\*/.test(inner) && !/^\S+$/.test(inner)) {
-      // e.g. Bash(some-cmd http://x/ *)
-      if (/https?:\/\//.test(inner) || /\s\*$/.test(inner)) {
-        emit('fragile-arg-rule', { file, line, evidence: evBase(`argument-constraining rule \`${rule}\``) });
-      }
+    // Fragile arg rule — only when an argument is plausibly being used to
+    // CONSTRAIN a sensitive command as a security boundary: an embedded web
+    // address/destination, or a destructive base command (rm, ssh, …). A plain
+    // prefix allow such as `Bash(git fetch *)` or `Bash(mytool validate *)` is
+    // just convenience, not a fragile boundary, so it is NOT flagged.
+    const baseCmd = inner.split(/\s+/)[0] || '';
+    const DANGEROUS_BASE = /^(rm|rmdir|dd|mkfs|sudo|doas|chmod|chown|chgrp|ssh|scp|sftp|rsync|eval|exec|kill|killall|shutdown|reboot)$/;
+    const constrainsArg = /[^*\s]\s+\S*\*/.test(inner);
+    if (constrainsArg && (/https?:\/\//.test(inner) || DANGEROUS_BASE.test(baseCmd))) {
+      emit('fragile-arg-rule', { file, line, evidence: evBase(`argument-constraining rule \`${rule}\``) });
     }
   }
 }
 
 function describeHooks(hooks) {
-  // hooks may be { PreToolUse: [...], PostToolUse: [...] } etc.
+  // hooks may be { PreToolUse: [...], PostToolUse: [...], SessionStart: [...] } etc.
+  // We surface the EVENT and a short snippet of the actual command, so the
+  // finding shows the user what runs rather than calling it "opaque".
   const events = Object.keys(hooks).filter((k) => Array.isArray(hooks[k]) || typeof hooks[k] === 'object');
-  let runsShell = false;
+  let firstCommand = null;
   const eventNames = [];
   for (const ev of events) {
     eventNames.push(ev);
@@ -981,12 +987,18 @@ function describeHooks(hooks) {
     for (const item of arr) {
       const inner = (item && item.hooks) || [item];
       for (const h of (Array.isArray(inner) ? inner : [inner])) {
-        if (h && (h.type === 'command' || typeof h.command === 'string')) runsShell = true;
+        if (h && typeof h.command === 'string' && firstCommand == null) firstCommand = h.command;
       }
     }
   }
-  if (!runsShell && events.length === 0) return null;
-  return `${runsShell ? 'a shell-command hook' : 'a hook'} on ${eventNames.join('/') || 'tool calls'}`;
+  if (firstCommand == null && events.length === 0) return null;
+  const when = eventNames.join('/') || 'tool calls';
+  if (firstCommand != null) {
+    const flat = firstCommand.replace(/\s+/g, ' ').trim();
+    const snippet = flat.length > 70 ? flat.slice(0, 70) + '…' : flat;
+    return `a hook runs \`${snippet}\` at ${when}`;
+  }
+  return `a hook at ${when}`;
 }
 
 function managedSettingsPath() {

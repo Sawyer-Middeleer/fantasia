@@ -317,22 +317,21 @@ human-assessed dimension layered on top.
 Write the report in plain English for someone who will never use a terminal
 (Cowork-friendly). Use the voice rules below. Structure it like this:
 
-### 3a. Score and grades
+### 3a. Open with a plain headline, then the score
 
-Lead with the overall **score (0–100)** and the per-dimension grades, grouped
-into two buckets so the meaning is obvious:
+Before any numbers, give **one plain sentence** that says where they stand and
+what (if anything) needs doing — e.g. *"Your setup's in good shape: one thing
+worth fixing and a couple of small notes,"* or *"One urgent thing here — an
+exposed key Claude can reach — then you're in good shape."* That sentence is what
+a non-technical reader actually needs, so lead with it.
 
-- **Safety** — `exposure` + `permissions` + `privacy`. (Critical findings hold
-  this down until fixed; say so.)
-- **Setup quality** — `context` + `leverage`.
-
-Use the scanner's grades for every dimension **except `leverage`** — that one is
-your re-graded assessment from Step 2.5c, and you say so plainly (e.g. "Leverage
-(my read, not the scanner's): B").
-
-Briefly say what the score means in human terms ("solid, a couple of things to
-tighten" / "one urgent thing, then you're in good shape"). Pull grading and
-phrasing guidance from `../../references/standards.md`.
+Then the overall **score (0–100)** as a quick gut-check with a human gloss. The
+per-dimension letter grades (`exposure`, `permissions`, `context`, …) are useful
+but abstract — keep them **brief and secondary** (a compact line, or an offer:
+"want the dimension-by-dimension breakdown?"), never the headline. Two things to
+keep accurate when you do show them: critical findings hold the score down until
+fixed (say so), and the `leverage` grade is your own read from Step 2.5c, not the
+scanner's. Pull phrasing guidance from `../../references/standards.md`.
 
 **If a baseline was in play** (you passed `--baseline` and `summary.newCount` is
 not `null`): open with what's *new*. Say plainly, e.g. "Since you accepted the
@@ -376,6 +375,15 @@ findings under leverage) and label them as your assessment, not a scanner rule.
    with `reachable: true`. These are the headline: a secret that Claude can
    actually reach is the thing that matters most. Put them first within their
    group.
+
+**Presentation by severity — de-noise the minor stuff.** Give *critical* and
+*high* findings the full treatment (what it is, why it matters here, how it was
+found, the fix). But **collapse everything *medium* and below into a single
+compact list** — "A few minor things worth knowing" — one calm plain line each
+(what it is + half a sentence of why), no heavy blocks and no evidence/fix walls.
+These are "good to know," not "do this now." Offer to expand any of them ("want me
+to walk through any of these?"). A benign, visible hook or a convenience allow
+rule belongs here as one relaxed line — never a scary block.
 
 **Per-file dedup (required).** The scanner emits **one `reachable-secret` (and
 one underlying secret finding) per secret**, so a single `.env` with five keys

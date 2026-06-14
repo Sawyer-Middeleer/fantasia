@@ -52,11 +52,11 @@
     {
       "id": "fragile-arg-rule",
       "dimension": "permissions",
-      "severity": "medium",
-      "title": "A bash rule tries to constrain arguments",
-      "detect": "permissions.allow contains an argument-constraining bash rule, e.g. `Bash(curl http://x/ *)` in {file}",
-      "why": "Argument-pattern allow rules give a false sense of security. They are bypassable with flags, https vs http, redirects, shell variables, or command chaining.",
-      "fix": "Don't rely on argument patterns for safety. Use a deny rule plus WebFetch(domain:...), or a PreToolUse hook that inspects the real command."
+      "severity": "low",
+      "title": "A rule pins part of a sensitive command to limit it",
+      "detect": "permissions.allow constrains an argument on a network or destructive command, e.g. `Bash(curl http://x/ *)` or `Bash(rm /tmp/ *)` in {file}. Plain convenience allows like `Bash(git fetch *)` are NOT flagged.",
+      "why": "Pinning a web address or path inside an allow rule looks like it limits the command, but those patterns slip past easily (a different protocol, a redirect, a shell variable). If you're relying on this as a safety wall, it won't hold. If it's just a convenience, it's fine — just don't treat it as a lock.",
+      "fix": "If you only meant it as a convenience, nothing to do. To actually restrict, use a deny rule, or limit web addresses with a WebFetch(domain: …) rule instead."
     },
     {
       "id": "env-runner-allowed",
@@ -106,11 +106,11 @@
     {
       "id": "opaque-hook",
       "dimension": "permissions",
-      "severity": "medium",
-      "title": "A hook runs a shell command on tool calls",
-      "detect": "a PreToolUse/PostToolUse (or other) hook runs a shell command, declared in {file}",
-      "why": "Hooks run automatically on tool calls. An opaque hook command can do anything your shell can, every time it fires, without a prompt.",
-      "fix": "Review exactly what the hook command runs. For cautious teams, prefer a ConfigChange hook and keep hook scripts in-repo and reviewed."
+      "severity": "info",
+      "title": "A hook runs automatically — here's what it does",
+      "detect": "a hook runs a command at some event (e.g. SessionStart, PreToolUse), declared in {file}; the command itself is shown in the evidence",
+      "why": "A hook is a command that runs on its own when something happens — like when Claude starts up or uses a tool — without asking each time. This one is written right in your settings, so it's not hidden: you can see exactly what it runs (shown below). Most hooks are things you set up yourself, like loading a notes file at startup. Just worth a glance to be sure it's yours.",
+      "fix": "Read the command shown. If you recognise it or set it up, you're all set. If you don't recognise it, remove it or check what it does."
     },
     {
       "id": "additional-dirs-broad",
