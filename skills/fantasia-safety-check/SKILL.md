@@ -38,7 +38,8 @@ The detail lives in the shared reference files — consult them as you go:
 ## Hard rules (these are non-negotiable — read before doing anything)
 
 1. **Disclose, then wait for consent.** Show the disclosure (Step 1) and STOP.
-   Do not run the scanner until the user explicitly says yes.
+   Do not run the scanner until the user explicitly says yes — and collect that
+   yes through the **AskUserQuestion** tool, not a free-text question (see rule 8).
 2. **Operate ONLY on the scanner's redacted JSON.** Everything you report comes
    from that JSON object. You do the reasoning; the script did the reading.
 3. **NEVER Read, Grep, `cat`, open, or otherwise inspect a flagged file.** This
@@ -52,12 +53,22 @@ The detail lives in the shared reference files — consult them as you go:
    is safe; a secret value is never. Never reconstruct, guess, or quote a real
    value anywhere.
 5. **Change nothing without explicit, per-item approval.** No edits during the
-   report. Fixes happen one at a time in the fix loop, each gated on a clear yes.
+   report. Fixes happen one at a time in the fix loop, each gated on a clear yes
+   collected through the **AskUserQuestion** tool (see rule 8).
 6. **Show your work.** Every finding you surface includes its `evidence` — how
    it was detected — so the user can judge it. No black-box findings.
 7. **Be honest when a control isn't airtight**, but ground the caveat in what
    *this* scan found (see Voice, below). Never raise an abstract limitation that
    doesn't apply here.
+8. **Use the AskUserQuestion tool at every decision gate.** The user's choices —
+   consent to scan (Step 1), each fix decision (Step 4), each dismissal (5a), the
+   baseline offer (5b), and the report offer (Step 6) — must be presented as
+   structured options via the **AskUserQuestion** tool, *never* as a prose
+   question you then wait on. Posing these in plain text is what makes the
+   checkup stall or quietly slide past a decision. The *only* things you ask in
+   ordinary conversation are genuinely open-ended prompts (e.g. "what in here is
+   sensitive to you?"). Everything with a fixed set of answers goes through the
+   tool.
 
 ---
 
@@ -94,16 +105,25 @@ detected, never looks above the project folder):
 > **The guarantee:** the script reads the bytes. I only ever see *redacted*
 > findings, so I never see your secrets. And every finding shows *how* it was
 > detected, so you can judge it yourself.
->
-> **Run the checkup?**  ·  yes  ·  no  ·  show me the rules first
 
-Then STOP and wait. Handle the response:
+Then get consent through the **AskUserQuestion** tool — do **not** pose this as a
+plain-text question and wait. Call it with:
 
-- **yes** → go to Step 2.
-- **no** → acknowledge plainly, do nothing, offer to run it later. Stop.
-- **show me the rules first** → summarize what gets checked from
-  `../../references/checks.md` (the dimensions and the kinds of findings, in
-  plain English), then ask again. Do not scan until they say yes.
+- **header:** `Run checkup`
+- **question:** "Ready to run the local checkup on `<folder>`?"
+- **options:**
+  - **Run the checkup** — "Run the offline scan now. Nothing changes; I only show you what I find."
+  - **Not right now** — "Don't scan. We can do this anytime."
+  - **Show me the rules first** — "See exactly what gets checked before running."
+
+Handle the choice:
+
+- **Run the checkup** → go to Step 2.
+- **Not right now** → acknowledge plainly, do nothing, offer to run it later. Stop.
+- **Show me the rules first** → summarize what gets checked from
+  `../../references/checks.md` (the dimensions and kinds of findings, in plain
+  English), then ask again with the **same tool** (just **Run the checkup** /
+  **Not right now**). Do not scan until they choose to run it.
 
 ---
 
@@ -420,14 +440,26 @@ the `reachable: true` ones). For each:
      key*, *move a file out of the project*, *change a consumer data-training
      setting in your account*), give clear, plain, numbered steps the user does
      themselves. Don't pretend you can do it for them.
-3. **Ask for approval.** Apply ONLY after an explicit yes for *this* item.
-   - When applying an `autoFixable` config change, use **Edit** (for existing
-     files like `.claude/settings.json`) or **Write** (to create a new file like
-     `.claudeignore`). Touch only config/ignore files — never the flagged file
-     that holds a secret.
-   - "Mark this as fine / not a problem" is also a valid choice — this is the
-     **dismiss flow** in Step 5a. Confirm it's a false positive, then record the
-     finding's `fingerprint` in `.fantasiaignore` (only after explicit approval).
+3. **Ask for approval with the AskUserQuestion tool** — never a prose yes/no.
+   Present *this* finding's decision as structured options:
+   - **header:** `Fix it?` · **question:** the finding's plain-language title.
+   - **options for an `autoFixable` item:** **Apply the fix** ("⟨the concrete
+     change in a few words⟩") · **Skip for now** ("Leave it; I'll list it as
+     still open.") · **Mark as fine** ("It's a false positive — stop flagging
+     it.") · **Stop the checkup** ("Pause here and summarize.").
+   - **options for a non-`autoFixable` item** (the steps are the user's to do, so
+     there's no "Apply"): **Got it, I'll do that** · **Skip for now** · **Mark as
+     fine** · **Stop the checkup**.
+
+   Then act on the choice — apply ONLY after the explicit choice for *this* item:
+   - **Apply the fix** → apply now. Use **Edit** (existing files like
+     `.claude/settings.json`) or **Write** (a new file like `.claudeignore`).
+     Touch only config/ignore files — never the flagged file that holds a secret.
+   - **Mark as fine** → the **dismiss flow** (Step 5a): confirm it's a genuine
+     false positive, then record the `fingerprint` in `.fantasiaignore`.
+   - **Skip for now** / **Got it, I'll do that** → leave it open and note it for
+     the report's "Still open" list.
+   - **Stop the checkup** → end the loop and go to the summary / report (Step 6).
 4. **After applying**, confirm what changed in one line, then move to the next
    finding. Track which findings you fixed this session and which the user left
    open — you'll need both lists for the report (Step 6).
@@ -491,9 +523,12 @@ current state. First say what it does and where it writes:
 > `.fantasia/baseline.json`. After that, every checkup will lead with anything
 > **new** since today and quietly mark the rest as already-reviewed — so you see
 > movement, not the same list every time. Nothing about your actual files
-> changes; it's just a record of what we've already looked at. Want me to?"
+> changes; it's just a record of what we've already looked at."
 
-On an explicit yes, snapshot by re-running the scanner with `--write-baseline`:
+Then ask with the **AskUserQuestion** tool (header `Baseline`): **Accept current
+state** ("Snapshot today's findings; future checkups show only what's new.") ·
+**Not now** ("Keep showing everything each time."). On **Accept current state**,
+snapshot by re-running the scanner with `--write-baseline`:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
@@ -519,13 +554,14 @@ At the end of an audit, offer to write a saved report to the project root. This
 **creates a new file**, so disclose first (the disclose-before-acting rule) with a
 one-line heads-up, then write only on a yes:
 
-> "Want me to drop a copy of this checkup in `FANTASIA-REPORT.md` at your project
-> root? It's a plain-English summary you can keep or share — no secret values in
-> it, just the redacted findings."
+> "I can drop a plain-English copy of this checkup in `FANTASIA-REPORT.md` at your
+> project root — something you can keep or share. No secret values, just the
+> redacted findings."
 
-If they decline, skip it. If they agree, use **Write** to create
-`$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md` if a path argument
-was given) using the template below.
+Then ask with the **AskUserQuestion** tool (header `Save report`): **Save the
+report** · **No thanks**. On **No thanks**, skip it. On **Save the report**, use
+**Write** to create `$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md`
+if a path argument was given) using the template below.
 
 **Hard rules still apply to the file:** never write a real secret value — only
 `redactedMatch`. Apply the per-file dedup (Step 3c) here too. Keep dismissed
