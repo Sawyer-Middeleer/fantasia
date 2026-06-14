@@ -234,7 +234,7 @@ The simplest useful starting point:
 }
 ```
 
-Run `/fantasia:setup` to have the setup interview generate a settings.json
+Run `/fantasia-safety-setup` to have the setup interview generate a settings.json
 appropriate for your project and caution level. Run `/permissions` in a
 session to view and edit rules interactively.
 
@@ -291,7 +291,7 @@ reliable for non-technical users:
    every significant action. This is the training wheels setting that lets
    you understand what Claude is doing before you trust it more.
 
-fantasia's `/fantasia:setup` interview generates all three from plain-English
+fantasia's `/fantasia-safety-setup` interview generates all three from plain-English
 answers. You don't need to understand the config files to get a sensible
 starting setup.
 

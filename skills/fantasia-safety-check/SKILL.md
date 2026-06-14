@@ -1,5 +1,5 @@
 ---
-name: audit
+name: fantasia-safety-check
 description: >-
   A private, local checkup for your Claude Code setup. Use when the user wants
   to audit, scan, or review their config for safety; when they ask what Claude

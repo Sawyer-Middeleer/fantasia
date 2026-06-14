@@ -28,12 +28,12 @@ to actually do something:
 
 | You type | What happens |
 | --- | --- |
-| `/fantasia:audit` | Scans the current folder, scores it, and walks you through fixes one at a time. |
-| `/fantasia:audit ./test/fixtures` | Same, on a deliberately-broken sample — the fastest way to see it work. |
-| `/fantasia:ask what's MCP?` | A plain-English answer, no jargon. |
-| `/fantasia:setup` | A short interview that sets up a new project safely. |
+| `/fantasia-safety-check` | Scans the current folder, scores it, and walks you through fixes one at a time. |
+| `/fantasia-safety-check ./test/fixtures` | Same, on a deliberately-broken sample — the fastest way to see it work. |
+| `/fantasia-ask what's MCP?` | A plain-English answer, no jargon. |
+| `/fantasia-safety-setup` | A short interview that sets up a new project safely. |
 
-`/help` lists the three skills under the `fantasia:` namespace once it's loaded.
+`/help` lists the three `fantasia-*` skills once it's loaded.
 
 ## 3. What to expect from an audit
 
@@ -47,8 +47,8 @@ to actually do something:
 ## Troubleshooting
 
 - **"I started Claude with `--plugin-dir` and nothing happened."** That's normal —
-  loading is silent. Type `/fantasia:audit` to begin.
-- **"`/fantasia:audit` isn't found."** The plugin didn't load. From *inside* the
+  loading is silent. Type `/fantasia-safety-check` to begin.
+- **"`/fantasia-safety-check` isn't found."** The plugin didn't load. From *inside* the
   repo the path is `.` (not `./fantasia`). Check with `/plugin`, and `/help` for
   the skill list. You may need a recent Claude Code version for `/plugin` and
   `--plugin-dir`.

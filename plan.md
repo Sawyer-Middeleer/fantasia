@@ -131,9 +131,9 @@ fantasia/
 │   ├── plugin.json              # name "fantasia", version, author, license
 │   └── marketplace.json         # repo is its own installable marketplace
 ├── skills/
-│   ├── audit/SKILL.md           # /fantasia:audit  — scan → score → fix loop   (PIECE 1)
-│   ├── setup/SKILL.md           # /fantasia:setup  — interview → configs → audit (PIECE 2)
-│   └── ask/SKILL.md             # /fantasia:ask    — plain-English Q&A           (PIECE 3)
+│   ├── fantasia-safety-check/SKILL.md   # /fantasia-safety-check — scan → score → fix   (PIECE 1)
+│   ├── fantasia-safety-setup/SKILL.md   # /fantasia-safety-setup — interview → configs  (PIECE 2)
+│   └── fantasia-ask/SKILL.md            # /fantasia-ask — plain-English Q&A             (PIECE 3)
 ├── bin/
 │   └── fantasia-scan            # zero-dep Node; emits redacted JSON findings (on PATH when enabled)
 ├── references/                  # SHARED knowledge — single source of truth
@@ -154,7 +154,7 @@ fantasia/
 ```
 
 Each piece is a **skill** (not a legacy `command`), so each is both
-user‑invocable (`/fantasia:audit`) *and* model‑invocable — when someone types
+user‑invocable (`/fantasia-safety-check`) *and* model‑invocable — when someone types
 "can Claude see my passwords?", `ask`/`audit` auto‑fires. Descriptions are
 written tightly so auto‑fire helps rather than nags.
 
@@ -219,7 +219,7 @@ human skim can't either.
 
 ## 6. The three pieces
 
-### Piece 1 — Audit + fix loop (`/fantasia:audit`)
+### Piece 1 — Audit + fix loop (`/fantasia-safety-check`)
 **Flow:** disclose & get consent (§9) → run `fantasia-scan` → it emits redacted
 JSON → skill renders a scored, plain‑English report incl. the **blast‑radius
 map** and **exposure correlations** → interactive **fix loop**: one finding at a
@@ -231,7 +231,7 @@ on the scanner's redacted JSON · **never** Read/Grep a flagged file · every
 finding shows `evidence` · never echo a secret value · state honestly when a
 control isn't airtight.
 
-### Piece 2 — Interview setup (`/fantasia:setup`)
+### Piece 2 — Interview setup (`/fantasia-safety-setup`)
 A jargon‑free `cold-start-interview`: *what is this project / what do you want
 help with / what's sensitive and off‑limits / which accounts & tools / how
 cautious should Claude be?* Generates from the answers:
@@ -243,11 +243,11 @@ cautious should Claude be?* Generates from the answers:
   the hand‑written 120‑word safety prompt into actual *enforced* config,
 - optionally a light **STATUS.md / folder structure** ("context‑OS lite").
 
-Then it **immediately runs `/fantasia:audit`** so they watch their score go
+Then it **immediately runs `/fantasia-safety-check`** so they watch their score go
 green. Setup and audit read the same `references/standards.md`, so they can't
 drift.
 
-### Piece 3 — Plain‑English Q&A (`/fantasia:ask`)
+### Piece 3 — Plain‑English Q&A (`/fantasia-ask`)
 **Concern‑first, not topic‑first.** Seeded with the workshop pain taxonomy in
 `references/concerns.md` mapping *real phrasings* → plain answers: "can Claude
 see my passwords?", "git vs GitHub?", "what's MCP?", "I ran out of tokens",
@@ -434,8 +434,8 @@ answers — not code.
   C, correlation. Ships value alone.
 - **M2:** privacy/data + context + leverage checks; scoring + `FANTASIA-REPORT.md`
   + baseline/`.fantasiaignore`.
-- **M3:** `/fantasia:setup` interview → configs → auto‑audit.
-- **M4:** `/fantasia:ask` with concern index + distilled doc pack + live fallback.
+- **M3:** `/fantasia-safety-setup` interview → configs → auto‑audit.
+- **M4:** `/fantasia-ask` with concern index + distilled doc pack + live fallback.
 - **M5:** polish, score badge, `claude plugin validate`, publish marketplace,
   submit to community.
 
@@ -445,7 +445,7 @@ answers — not code.
 
 1. **Scanner:** ship‑our‑own zero‑dep Node baseline, optional `gitleaks` deep
    scan if present. *(recommended)*
-2. **Command names:** `/fantasia:audit` · `:setup` · `:ask` — or friendlier
+2. **Command names:** `/fantasia-safety-check` · `:setup` · `:ask` — or friendlier
    `:checkup` · `:getting-started` · `:explain`?
 3. **Score:** single 0–100 + per‑dimension grades. *(recommended)*
 4. **Q&A grounding:** bundled distilled pack + live fallback. *(recommended)*

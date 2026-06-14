@@ -8,7 +8,7 @@
  *
  * PURPOSE
  * -------
- * The `references/docs/` plain-English pack (Piece 3 / /fantasia:ask) is
+ * The `references/docs/` plain-English pack (Piece 3 / /fantasia-ask) is
  * distilled from these raw sources.  Distillation requires an LLM and is a
  * separate (human or agent) step.  This script's job is purely to FETCH AND
  * CACHE the upstream markdown so that step always has fresh input.

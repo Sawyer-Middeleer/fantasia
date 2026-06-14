@@ -20,12 +20,12 @@ that keeps the brooms in their lane.
 
 ## What it does
 
-- **🔎 Audit + fix** (`/fantasia:audit`) — a private, local scan that scores your
+- **🔎 Audit + fix** (`/fantasia-safety-check`) — a private, local scan that scores your
   setup, shows what's exposed and reachable, explains *how it knows*, and fixes
   issues with your approval.
-- **🧰 Setup** (`/fantasia:setup`) — a plain‑English interview that generates a
+- **🧰 Setup** (`/fantasia-safety-setup`) — a plain‑English interview that generates a
   safe starting config (CLAUDE.md, permission rules, ignore rules).
-- **💬 Ask** (`/fantasia:ask`) — the Claude Code docs in plain English, starting
+- **💬 Ask** (`/fantasia-ask`) — the Claude Code docs in plain English, starting
   from the questions real people actually ask, personalized to your setup.
 
 ## The privacy promise
@@ -48,12 +48,12 @@ Installing or loading the plugin is **silent** — nothing runs on its own. You
 then invoke one of the three skills:
 
 ```
-/fantasia:audit              # checkup of your current folder
-/fantasia:ask what's MCP?    # plain-English answers
-/fantasia:setup              # safe first-time setup
+/fantasia-safety-check              # checkup of your current folder
+/fantasia-ask what's MCP?    # plain-English answers
+/fantasia-safety-setup              # safe first-time setup
 ```
 
-`/help` lists the skills under the `fantasia:` namespace once it's loaded.
+`/help` lists the three `fantasia-*` skills once it's loaded.
 
 ## Try it from a clone (no install)
 
@@ -62,12 +62,12 @@ then invoke one of the three skills:
 claude --plugin-dir .
 ```
 
-Then run `/fantasia:audit ./test/fixtures` — a deliberately-broken sample
+Then run `/fantasia-safety-check ./test/fixtures` — a deliberately-broken sample
 project — to see the scan, the score, and the redaction in action. Edit plugin
 files and run `/reload-plugins` to pick up changes; `claude plugin validate .`
 checks the structure before release.
 
-> **"Nothing happened"?** Loading is silent — type `/fantasia:audit` to start.
+> **"Nothing happened"?** Loading is silent — type `/fantasia-safety-check` to start.
 > And from inside the repo the path is `.`, not `./fantasia` (which would resolve
 > to a folder that doesn't exist).
 

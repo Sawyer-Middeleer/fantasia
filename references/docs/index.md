@@ -1,6 +1,6 @@
 # fantasia docs — orientation map
 
-This folder is a distilled plain-English knowledge base for the `/fantasia:ask`
+This folder is a distilled plain-English knowledge base for the `/fantasia-ask`
 skill. Each file covers one topic area, written for someone who is new to Claude
 Code and may not be technical.
 

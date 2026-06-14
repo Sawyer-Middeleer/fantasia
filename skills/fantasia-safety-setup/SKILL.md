@@ -1,5 +1,5 @@
 ---
-name: setup
+name: fantasia-safety-setup
 description: >-
   A warm, plain-English interview that sets up Claude Code safely for you. Use
   when someone is getting started, just installed Claude Code, or asks how to
@@ -26,7 +26,7 @@ and at the end we run the audit so you can watch your fresh setup score green.
 **The flow, end to end:** warm intro + what we'll create (Step 1) → the
 interview, one question at a time (Step 2) → generate each file as a preview,
 written only on your yes (Step 3) → optional light structure if your work spans
-several projects (Step 3d) → hand off to `/fantasia:audit` so you see the score
+several projects (Step 3d) → hand off to `/fantasia-safety-check` so you see the score
 (Step 4).
 
 The deeper "what good looks like" detail lives in the shared reference files —
@@ -285,7 +285,7 @@ see their fresh setup graded:
 > it scores your setup and confirms the safety rules took. It should come back
 > high, because I set things up to the exact standard the checkup looks for."
 
-Then invoke **`/fantasia:audit`** on the same project folder. Setup and audit
+Then invoke **`/fantasia-safety-check`** on the same project folder. Setup and audit
 read the same `../../references/standards.md`, so a setup done with the `careful`
 or `balanced` preset should produce a clean run — secret fencing in place, no
 loose permissions, a `CLAUDE.md` present. If anything still shows up (for

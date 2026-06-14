@@ -175,7 +175,7 @@
       "title": "No CLAUDE.md found",
       "detect": "no CLAUDE.md (or AGENTS.md) in the project root",
       "why": "Without a CLAUDE.md, Claude has no project-specific guidance — conventions, what's off-limits, how to route work — so it guesses more and you repeat yourself.",
-      "fix": "Generate a right-sized CLAUDE.md (the /fantasia:setup interview can do this for you)."
+      "fix": "Generate a right-sized CLAUDE.md (the /fantasia-safety-setup interview can do this for you)."
     },
     {
       "id": "claude-md-bloated",

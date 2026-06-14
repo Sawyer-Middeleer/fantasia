@@ -1,5 +1,5 @@
 ---
-name: ask
+name: fantasia-ask
 description: >-
   Plain-English answers to Claude Code questions, for people who are new to it
   and don't want jargon. Use when someone asks a confused or beginner question
@@ -30,8 +30,8 @@ detail from the matching topic file (Step 2) → if neither covers it, fetch the
 live docs (Step 3) → optionally personalize from the user's own config (Step 4) →
 answer in plain English and offer the obvious next step (Step 5).
 
-This skill is a sibling of `/fantasia:audit` (the safety checkup) and
-`/fantasia:setup` (the guided setup). When a question is really a request to
+This skill is a sibling of `/fantasia-safety-check` (the safety checkup) and
+`/fantasia-safety-setup` (the guided setup). When a question is really a request to
 *check* or *configure* something, hand off — see "When to hand off" below.
 
 The actual content lives in the shared reference files — this skill is the
@@ -61,7 +61,7 @@ The actual content lives in the shared reference files — this skill is the
    to personalize an answer (Step 4), but you do **not** scan their project for
    secrets, you do **not** open files that look sensitive, and you **never** echo
    a secret value. For "am I exposed / is my setup safe," hand off to
-   `/fantasia:audit`, which has the proper redaction and consent machinery.
+   `/fantasia-safety-check`, which has the proper redaction and consent machinery.
 3. **Define every term the first time you use it**, in one short plain-English
    clause — "MCP (a connector that lets Claude reach another app like Gmail)",
    "token (a chunk of text — roughly a few characters — that Claude reads and
@@ -179,10 +179,10 @@ Use them to make the answer concrete. Examples of the payoff:
 - **Never echo a secret value.** If a config file happens to contain one (it
   shouldn't, but `.mcp.json` sometimes holds tokens), do not repeat it — refer to
   it as "the token you've got in there" and, if it's a real exposed secret,
-  hand off to `/fantasia:audit` rather than dwelling on it here.
+  hand off to `/fantasia-safety-check` rather than dwelling on it here.
 - **Explain, don't change.** `ask` answers questions; it doesn't edit config.
-  If the answer is "you should change X," offer to hand off to `/fantasia:setup`
-  (to configure) or `/fantasia:audit` (to check and fix) rather than editing
+  If the answer is "you should change X," offer to hand off to `/fantasia-safety-setup`
+  (to configure) or `/fantasia-safety-check` (to check and fix) rather than editing
   files yourself.
 - **It's optional.** If reading their config wouldn't sharpen the answer, skip it
   and just answer the general question well.
@@ -192,11 +192,11 @@ Use them to make the answer concrete. Examples of the payoff:
 - **"Am I exposed? Is my setup safe? Can Claude see my passwords? What can it
   touch?"** → this is a *checkup*, not a question. Answer the conceptual part
   briefly, then hand off: "I can explain how access works — but to actually check
-  *your* setup safely, that's what `/fantasia:audit` is for. It runs a local scan
+  *your* setup safely, that's what `/fantasia-safety-check` is for. It runs a local scan
   that reads the bytes so I never see your secrets. Want me to kick that off?"
 - **"Help me set this up / configure this / make a CLAUDE.md / write a
-  settings.json."** → hand off to `/fantasia:setup`: "There's a guided setup for
-  exactly this — `/fantasia:setup` asks a few plain questions and generates the
+  settings.json."** → hand off to `/fantasia-safety-setup`: "There's a guided setup for
+  exactly this — `/fantasia-safety-setup` asks a few plain questions and generates the
   files for you, each previewed before it's saved. Want to run it?"
 
 Answer the *understanding* question here; route the *doing* to the sibling skill.
@@ -223,7 +223,7 @@ sounds like its siblings on purpose. The essentials:
   worry — the §4 voice rule applies here too.
 - **End with the obvious next step or related question.** "Want me to show how to
   scope that down?" "The related thing people usually ask next is X — want that?"
-  "That's really a setup question — want me to run `/fantasia:setup`?" Never end
+  "That's really a setup question — want me to run `/fantasia-safety-setup`?" Never end
   on a bare fact.
 
 The goal: someone leaves the answer understanding the thing *and* their own

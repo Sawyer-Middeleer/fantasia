@@ -635,7 +635,7 @@ context about your project — what it is, what conventions to follow, what's
 off-limits. Without it, Claude has no project-specific grounding and will rely
 entirely on what you type in each conversation.
 
-**Fix.** Run `/fantasia:setup` to generate a right-sized `CLAUDE.md` from
+**Fix.** Run `/fantasia-safety-setup` to generate a right-sized `CLAUDE.md` from
 plain-English answers about your project.
 
 ---
