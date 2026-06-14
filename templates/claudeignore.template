@@ -1,0 +1,85 @@
+# .claudeignore — tells Claude Code which files to skip when browsing your project.
+# Think of it as a "do not read" list. It's a starting point — add anything that
+# feels private to you. For the strongest protection against secrets, fantasia setup
+# also adds deny rules in settings.json alongside this file (see the note at the bottom).
+
+# ── Secrets & credentials ─────────────────────────────────────────────────────
+# These file types commonly hold passwords, API keys, and private keys.
+# Claude Code will skip them when walking your project.
+.env
+.env.*
+.env.local
+.env.*.local
+
+*.pem
+*.key
+*.p12
+*.pfx
+
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+credentials
+credentials.json
+credentials.csv
+*credentials*
+*secret*
+*token*
+*api_key*
+*apikey*
+
+.aws/
+.gcp/
+.ssh/
+secrets/
+
+# ── Sensitive personal & business documents ───────────────────────────────────
+# These patterns catch files that often contain personal or business information
+# you probably don't want an AI reading. They're examples — tailor this list to
+# your situation. If you have a folder called "financials/" or "client-docs/",
+# add it here.
+*tax*
+*payroll*
+*invoice*
+*salary*
+*medical*
+*patient*
+*diagnosis*
+*prescription*
+*ssn*
+*passport*
+*confidential*
+*legal-hold*
+*settlement*
+
+# ── Local junk (wastes context, slows Claude down) ────────────────────────────
+# These aren't secret — they're just large or irrelevant. Skipping them keeps
+# Claude focused and faster.
+node_modules/
+.git/
+dist/
+build/
+.next/
+.cache/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+*.log
+*.log.*
+logs/
+*.dump
+*.sql.gz
+*.csv.bak
+
+# ── A note on how this works ──────────────────────────────────────────────────
+# .claudeignore controls Claude Code's directory browsing — the files it finds
+# when it walks your project looking for context. It does NOT prevent Claude from
+# opening a file if it knows the exact path.
+#
+# For the strongest protection, fantasia setup adds Read deny rules in
+# .claude/settings.json alongside this file. Those rules stop Claude's file tools
+# from opening the listed paths even if asked directly. Together, the two controls
+# cover the most common exposure vectors.

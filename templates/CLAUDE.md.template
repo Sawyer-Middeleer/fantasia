@@ -1,0 +1,58 @@
+# <PLACEHOLDER: Project name — e.g. "My consulting practice" or "Personal finance tracker">
+
+<!-- What this file does: it gives Claude persistent context about your project so
+     you don't have to re-explain it every conversation. Keep it short — 40-50 lines
+     is plenty. A map, not a manual. Fill in the <PLACEHOLDER> fields below. -->
+
+---
+
+## What this is
+
+<!-- One or two sentences: what is the project, and who is it for? -->
+<PLACEHOLDER: e.g. "A collection of templates and notes I use to run my freelance design business. Clients are small nonprofits.">
+
+---
+
+## What I want Claude's help with
+
+<!-- List the 2-4 things you actually want help with most often. Be specific. -->
+- <PLACEHOLDER: e.g. "Drafting client proposals and follow-up emails">
+- <PLACEHOLDER: e.g. "Summarizing meeting notes into action items">
+- <PLACEHOLDER: e.g. "Proofreading documents before I send them">
+
+---
+
+## How to work with me
+
+<!-- Plain-English working preferences. Claude will follow these in every session. -->
+- Ask before making big changes — show me what you're planning to do first.
+- Explain things in plain language. I'm not a developer.
+- Keep responses concise unless I ask you to go deeper.
+- <PLACEHOLDER: Add anything else — e.g. "I prefer bullet points over long paragraphs" or "Always suggest a next step at the end">
+
+---
+
+## Off-limits / sensitive
+
+<!-- Be explicit: what should Claude never touch or read, even if you accidentally ask? -->
+- Never read, summarize, or quote from `.env` files, password files, or anything in `secrets/`.
+- Never send emails, post messages, or take actions outside this project without asking me first.
+- <PLACEHOLDER: Add anything specific to your project — e.g. "Do not share or reference client names from the /clients folder in responses">
+
+---
+
+## Conventions
+
+<!-- Optional: how files are named, what tools you use, style preferences Claude should know. -->
+<!-- Delete this section if you don't need it yet. -->
+- <PLACEHOLDER: e.g. "Draft documents go in /drafts. Final versions go in /final.">
+- <PLACEHOLDER: e.g. "I write in a friendly, direct tone — not formal corporate language.">
+
+---
+
+## Where things live
+
+<!-- Optional: only add this if your project has multiple folders Claude needs to know about.
+     Delete this section for simple projects. -->
+- <PLACEHOLDER: e.g. "`/clients/` — one folder per client with their notes and contracts">
+- <PLACEHOLDER: e.g. "`/templates/` — reusable email and proposal templates">
