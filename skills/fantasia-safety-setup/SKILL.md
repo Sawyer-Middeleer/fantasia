@@ -45,7 +45,8 @@ consult them as you go rather than duplicating them here:
 
 1. **Disclose, then act.** Before the interview, say in one line what setup will
    create (new files in their project). Before writing *any* file, show it as a
-   preview and wait for an explicit yes. Nothing is written without approval.
+   preview and wait for an explicit yes — collected through the **AskUserQuestion**
+   tool (see rule 7). Nothing is written without approval.
 2. **One topic at a time, no jargon.** Ask a single question, wait for the
    answer, then ask the next. Define any term the first time it comes up (e.g.
    "MCP — that's how Claude connects to outside accounts like Gmail or Slack").
@@ -61,6 +62,14 @@ consult them as you go rather than duplicating them here:
    generic block and move on.
 6. **Always offer the next step.** End every part with a clear, low-friction
    choice. Never leave them staring at a decision with no door forward.
+7. **Use the AskUserQuestion tool for every fixed-choice decision.** The caution
+   level (Q5), each file-write approval (Step 3), the optional-structure offer
+   (3d), and the run-the-checkup handoff (Step 4) all have a known set of answers
+   — present them as structured options via the **AskUserQuestion** tool, never as
+   a prose question you wait on. The open-ended interview questions (Q1–Q4: what
+   the project is, what's sensitive, and so on) stay as ordinary conversation —
+   they have no fixed answers. Rule of thumb: **if you can list the choices, use
+   the tool.**
 
 ---
 
@@ -152,7 +161,19 @@ presets leave those needing per-request approval — a good default.
 > - **Fast** — Claude auto-accepts edits and routine commands inside this folder
 >   to keep things moving. Handy for low-stakes work, but it checks in less.
 >
-> Which feels right? If you're not sure, we'll go with **Careful**."
+> Which feels right?"
+
+Show those three plain-English descriptions in the message, then ask with the
+**AskUserQuestion** tool — don't make them type the answer. Use header
+`Caution level`, question "How cautious should Claude be?", options
+(recommended first):
+
+- **Careful (Recommended)** — "Claude asks before almost everything. Best to start."
+- **Balanced** — "Claude does obviously-safe things on its own, asks before anything riskier."
+- **Fast** — "Auto-accepts edits and routine commands in this folder; checks in less."
+
+If they choose "Other," read their free text as their cautiousness answer and map
+it to the nearest preset, defaulting to `careful` when unsure.
 
 *Captures:* the preset. Map their answer to `careful` / `balanced` / `fast`. For
 a beginner or a project with sensitive data, steer toward `careful`. The
@@ -172,9 +193,12 @@ setting — that all sound right?"), then move to Step 3.
 ## Step 3 — Generate the files (preview, then write on approval)
 
 Generate each file below **as a preview first**, then write it only after an
-explicit yes. Use **Write** to create a new file and **Edit** to amend one that
-already exists (read it first so you append rather than clobber). Go in order;
-do one, confirm, then the next.
+explicit yes — and collect that yes with the **AskUserQuestion** tool, not a prose
+question. For each file: show the preview, then ask (header `Save file?`):
+**Save it** · **Change something first** ("tell me what to adjust and I'll
+re-preview") · **Skip this one**. Use **Write** to create a new file and **Edit**
+to amend one that already exists (read it first so you append rather than
+clobber). Go in order; do one, get the choice, then the next.
 
 ### 3a. CLAUDE.md
 
@@ -267,12 +291,14 @@ or a folder-per-client layout), offer a simple structure:
 > "One optional extra: since you're juggling a few different clients, I can add a
 > tiny `STATUS.md` — a running note of what you're working on and where things
 > stand — plus a simple folder-per-client layout, so Claude (and you) can always
-> pick up where you left off. Totally optional. Want it?"
+> pick up where you left off. Totally optional."
 
-If yes, generate a minimal `STATUS.md` (current focus, recent decisions, what's
-next) and propose a simple folder layout — the smallest useful version, not a
-full system. Preview, then write on a yes. If their project is simple, **skip
-this entirely** — don't mention it.
+Then ask with the **AskUserQuestion** tool (header `Extra structure`): **Add it** ·
+**No thanks**. On **Add it**, generate a minimal `STATUS.md` (current focus, recent
+decisions, what's next) and propose a simple folder layout — the smallest useful
+version, not a full system. Preview it, then save it through the same
+`Save file?` choice as the other files (Step 3 intro). If their project is simple,
+**skip this entirely** — don't mention it or ask.
 
 ---
 
@@ -281,11 +307,13 @@ this entirely** — don't mention it.
 Once the files are written, close the loop by running the sibling skill so they
 see their fresh setup graded:
 
-> "That's your setup in place. Let's run a quick checkup so you can see it land —
-> it scores your setup and confirms the safety rules took. It should come back
+> "That's your setup in place. Want to run a quick checkup so you can see it land?
+> It scores your setup and confirms the safety rules took — and should come back
 > high, because I set things up to the exact standard the checkup looks for."
 
-Then invoke **`/fantasia-safety-check`** on the same project folder. Setup and audit
+Then ask with the **AskUserQuestion** tool (header `Run checkup?`): **Run the
+checkup now** · **Maybe later**. On **Run the checkup now**, invoke
+**`/fantasia-safety-check`** on the same project folder. Setup and audit
 read the same `../../references/standards.md`, so a setup done with the `careful`
 or `balanced` preset should produce a clean run — secret fencing in place, no
 loose permissions, a `CLAUDE.md` present. If anything still shows up (for
