@@ -1,0 +1,28 @@
+{
+  "defaultMode": "bypassPermissions",
+  "skipWebFetchPreflight": true,
+  "permissions": {
+    "allow": [
+      "Bash(curl *)",
+      "Bash(npx *)",
+      "WebFetch",
+      "mcp__*"
+    ],
+    "deny": []
+  },
+  "additionalDirectories": ["~"],
+  "env": {
+    "DISABLE_TELEMETRY": "0"
+  },
+  "cleanupPeriodDays": 30,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node ./scripts/check.js" }
+        ]
+      }
+    ]
+  }
+}

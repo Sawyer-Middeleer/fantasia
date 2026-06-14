@@ -1,0 +1,1441 @@
+#!/usr/bin/env node
+/*
+ * fantasia-scan — the deterministic, privacy-safe scanner at the heart of fantasia.
+ *
+ * Zero external dependencies (Node built-ins only). Cross-platform.
+ *
+ * It does the reading so Claude doesn't have to: it reads file BYTES, applies
+ * regex/entropy/keyword rules, and emits ONLY redacted, structured JSON findings.
+ * A raw secret value never appears in the output — a final safety pass enforces this.
+ *
+ * Usage:
+ *   node bin/fantasia-scan [projectPath] [--json] [--rules <dir>] [--no-user-config]
+ *
+ * With --json: prints ONE JSON object to stdout and exits 0 on a successful scan
+ * regardless of how many findings. Exits nonzero ONLY on operational failure,
+ * writing {"error":"..."} to stderr.
+ */
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const FANTASIA_VERSION = '0.1.0';
+const MAX_FILE_BYTES = 1024 * 1024; // 1 MB
+const BULLET = '•'; // •
+const REDACT_VISIBLE = 4;
+const REDACT_MAX_BULLETS = 12;
+
+// ---------------------------------------------------------------------------
+// Arg parsing
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const args = { projectPath: null, json: false, rulesDir: null, userConfig: true };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--json') args.json = true;
+    else if (a === '--no-user-config') args.userConfig = false;
+    else if (a === '--rules') { args.rulesDir = argv[++i]; }
+    else if (a.startsWith('--rules=')) { args.rulesDir = a.slice('--rules='.length); }
+    else if (a.startsWith('--')) { /* ignore unknown flags */ }
+    else if (args.projectPath === null) { args.projectPath = a; }
+  }
+  return args;
+}
+
+// ---------------------------------------------------------------------------
+// Path helpers — normalize to POSIX forward slashes for all reported paths
+// ---------------------------------------------------------------------------
+
+function toPosix(p) {
+  return p.replace(/\\/g, '/');
+}
+
+function relPosix(root, abs) {
+  const rel = path.relative(root, abs);
+  return toPosix(rel);
+}
+
+// True if `child` is inside (or equal to) `parent` — guards against traversal.
+function isInside(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+// ---------------------------------------------------------------------------
+// Redaction — NEVER print a raw secret value
+// ---------------------------------------------------------------------------
+
+function redact(raw) {
+  if (raw == null) return null;
+  const s = String(raw);
+  if (s.length === 0) return '';
+  const visible = s.slice(0, REDACT_VISIBLE);
+  const hiddenCount = Math.max(s.length - REDACT_VISIBLE, 0);
+  const bullets = BULLET.repeat(Math.min(hiddenCount, REDACT_MAX_BULLETS));
+  // Cap total length; if value is shorter than REDACT_VISIBLE, show what's there.
+  const head = s.length <= REDACT_VISIBLE ? s : visible;
+  return head + bullets;
+}
+
+// ---------------------------------------------------------------------------
+// Shannon entropy (bits per char)
+// ---------------------------------------------------------------------------
+
+function shannonEntropy(str) {
+  if (!str || str.length === 0) return 0;
+  const freq = Object.create(null);
+  for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
+  let entropy = 0;
+  const len = str.length;
+  for (const ch in freq) {
+    const p = freq[ch] / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+// ---------------------------------------------------------------------------
+// Rule pack loading
+// ---------------------------------------------------------------------------
+
+function loadRules(rulesDir) {
+  const read = (name) => {
+    const p = path.join(rulesDir, name);
+    const txt = fs.readFileSync(p, 'utf8');
+    return JSON.parse(txt);
+  };
+  const secrets = read('secrets.json');
+  const sensitive = read('sensitive.json');
+  const settingsChecks = read('settings-checks.json');
+
+  // Pre-compile secret regexes. We translate a leading "(?i)" inline flag into
+  // the JS 'i' flag, since JS RegExp does not support inline flag groups.
+  for (const rule of secrets.rules) {
+    rule._re = compileRegex(rule.regex, 'g');
+  }
+  for (const cat of sensitive.categories) {
+    if (Array.isArray(cat.patterns)) {
+      for (const pat of cat.patterns) {
+        pat._re = compileRegex(pat.regex, 'g');
+      }
+    }
+  }
+  return { secrets, sensitive, settingsChecks };
+}
+
+// Compile a rule regex source, honoring a leading (?i) by lifting it to a flag.
+function compileRegex(source, baseFlags) {
+  let flags = baseFlags || '';
+  let src = source;
+  // Lift leading inline flags like (?i) or (?im) that JS can't parse inline.
+  const m = /^\(\?([a-z]+)\)/.exec(src);
+  if (m) {
+    for (const f of m[1]) {
+      if ('imsuy'.includes(f) && !flags.includes(f)) flags += f;
+    }
+    src = src.slice(m[0].length);
+  }
+  return new RegExp(src, flags);
+}
+
+// ---------------------------------------------------------------------------
+// .gitignore / .claudeignore — minimal but functional matcher
+// ---------------------------------------------------------------------------
+
+function loadIgnoreFile(absPath) {
+  // Returns array of pattern strings (raw lines, comments/blanks removed).
+  try {
+    const txt = fs.readFileSync(absPath, 'utf8');
+    return txt
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'));
+  } catch {
+    return [];
+  }
+}
+
+// Convert a single gitignore-style glob pattern to a RegExp matched against a
+// POSIX-relative path. Supports **, *, ?, leading /, trailing / (dir), negation
+// handled by caller. This is intentionally conservative: when in doubt, ignore.
+function ignorePatternToRegExp(pattern) {
+  let p = pattern;
+  let anchored = false;
+  let dirOnly = false;
+  if (p.startsWith('/')) { anchored = true; p = p.slice(1); }
+  if (p.endsWith('/')) { dirOnly = true; p = p.slice(0, -1); }
+
+  // Escape regex specials except our glob chars.
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '*') {
+      if (p[i + 1] === '*') {
+        // ** — match across path segments
+        i++;
+        if (p[i + 1] === '/') { i++; re += '(?:.*/)?'; }
+        else { re += '.*'; }
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else if ('.+^${}()|[]\\'.includes(c)) {
+      re += '\\' + c;
+    } else {
+      re += c;
+    }
+  }
+  const tail = dirOnly ? '(?:/.*)?$' : '(?:/.*)?$';
+  const head = anchored ? '^' : '^(?:.*/)?';
+  // If pattern contains no slash and isn't anchored, it can match at any depth.
+  const hasSlash = p.includes('/');
+  const prefix = anchored ? '^' : (hasSlash ? '^' : '^(?:.*/)?');
+  return { re: new RegExp(prefix + re + tail), dirOnly };
+}
+
+function makeIgnoreMatcher(patterns) {
+  const compiled = [];
+  for (const raw of patterns) {
+    let pat = raw;
+    let negate = false;
+    if (pat.startsWith('!')) { negate = true; pat = pat.slice(1); }
+    try {
+      const { re, dirOnly } = ignorePatternToRegExp(pat);
+      compiled.push({ re, dirOnly, negate });
+    } catch {
+      /* skip malformed pattern */
+    }
+  }
+  return function isIgnored(relPath, isDir) {
+    let ignored = false;
+    const candidate = toPosix(relPath);
+    for (const c of compiled) {
+      if (c.dirOnly && !isDir) continue;
+      if (c.re.test(candidate)) ignored = !c.negate;
+    }
+    return ignored;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Binary sniff — null byte in first chunk
+// ---------------------------------------------------------------------------
+
+function looksBinary(buf) {
+  const n = Math.min(buf.length, 8000);
+  for (let i = 0; i < n; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Line-number lookup from a byte/char offset (CRLF-safe; we operate on the
+// decoded string, so \r\n counts as one boundary on \n)
+// ---------------------------------------------------------------------------
+
+function offsetToLine(text, offset) {
+  let line = 1;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text[i] === '\n') line++;
+  }
+  return line;
+}
+
+// Extract the single line of text containing a given offset (without EOL).
+function lineAt(text, offset) {
+  let start = offset;
+  while (start > 0 && text[start - 1] !== '\n') start--;
+  let end = offset;
+  while (end < text.length && text[end] !== '\n') end++;
+  return text.slice(start, end).replace(/\r$/, '');
+}
+
+// ---------------------------------------------------------------------------
+// Tree walk
+// ---------------------------------------------------------------------------
+
+const ALWAYS_SKIP_DIRS = new Set(['node_modules', '.git']);
+
+function walk(root, ignoreMatcher, onFile, access) {
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      const abs = path.join(dir, ent.name);
+      const rel = relPosix(root, abs);
+
+      // Never traverse above root.
+      if (!isInside(root, abs)) {
+        access.traversedAboveRoot = false; // we explicitly do not
+        continue;
+      }
+
+      let isDir = ent.isDirectory();
+      let isSymlink = ent.isSymbolicLink();
+
+      if (isSymlink) {
+        // Do not follow symlinks that escape root; resolve and check.
+        let realTarget;
+        try {
+          realTarget = fs.realpathSync(abs);
+        } catch {
+          continue; // dangling symlink
+        }
+        if (!isInside(root, realTarget)) {
+          continue; // points outside root — skip entirely
+        }
+        // In-root symlink: stat the target to decide dir vs file.
+        try {
+          const st = fs.statSync(abs);
+          isDir = st.isDirectory();
+        } catch {
+          continue;
+        }
+      }
+
+      if (isDir) {
+        if (ALWAYS_SKIP_DIRS.has(ent.name)) {
+          access.skipped.dirs.add(ent.name);
+          continue;
+        }
+        if (ignoreMatcher(rel, true)) {
+          access.skipped.dirs.add(rel);
+          continue;
+        }
+        stack.push(abs);
+        continue;
+      }
+
+      // Regular file.
+      if (ignoreMatcher(rel, false)) {
+        access.skipped.ignored++;
+        continue;
+      }
+      onFile(abs, rel);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings / config parsing
+// ---------------------------------------------------------------------------
+
+function safeReadJson(absPath) {
+  try {
+    const txt = fs.readFileSync(absPath, 'utf8');
+    return { ok: true, data: JSON.parse(stripJsonComments(txt)), text: txt };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: false, missing: true };
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+}
+
+// Minimal JSONC comment stripper (// and /* */), string-aware.
+function stripJsonComments(txt) {
+  let out = '';
+  let inStr = false, strCh = '', inLine = false, inBlock = false;
+  for (let i = 0; i < txt.length; i++) {
+    const c = txt[i], n = txt[i + 1];
+    if (inLine) { if (c === '\n') { inLine = false; out += c; } continue; }
+    if (inBlock) { if (c === '*' && n === '/') { inBlock = false; i++; } continue; }
+    if (inStr) {
+      out += c;
+      if (c === '\\') { out += n; i++; continue; }
+      if (c === strCh) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'") { inStr = true; strCh = c; out += c; continue; }
+    if (c === '/' && n === '/') { inLine = true; i++; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; continue; }
+    out += c;
+  }
+  return out;
+}
+
+// Find the 1-based line of the first occurrence of `needle` in `text`.
+function findLine(text, needle) {
+  if (!text || needle == null) return null;
+  const idx = text.indexOf(needle);
+  if (idx < 0) return null;
+  return offsetToLine(text, idx);
+}
+
+// ---------------------------------------------------------------------------
+// Finding builder
+// ---------------------------------------------------------------------------
+
+function makeFinding(f) {
+  const file = f.file == null ? null : toPosix(f.file);
+  const line = f.line == null ? null : f.line;
+  const finding = {
+    id: f.id,
+    title: f.title || '',
+    dimension: f.dimension,
+    severity: f.severity,
+    file,
+    line,
+    redactedMatch: f.redactedMatch == null ? null : f.redactedMatch,
+    evidence: f.evidence || '',
+    why: f.why || '',
+    fix: f.fix || '',
+    reachable: f.reachable === undefined ? null : f.reachable,
+    autoFixable: !!f.autoFixable,
+    fingerprint: `${file == null ? '' : file}:${f.id}:${line == null ? '' : line}`,
+  };
+  // Internal-only fields, kept on the object for the final redaction safety pass.
+  // They are NON-ENUMERABLE so JSON.stringify never serializes them, and the
+  // safety pass reads them directly before output.
+  if (f._raw != null) {
+    Object.defineProperty(finding, '_raw', { value: f._raw, enumerable: false, writable: true, configurable: true });
+  }
+  if (f._rawSnippetSource != null) {
+    Object.defineProperty(finding, '_rawSnippetSource', { value: f._rawSnippetSource, enumerable: false, writable: true, configurable: true });
+  }
+  return finding;
+}
+
+// ---------------------------------------------------------------------------
+// Glob (filename) matcher for sensitive filenameGlobs — * and ? on a basename
+// ---------------------------------------------------------------------------
+
+function basenameGlobToRegExp(glob) {
+  let re = '^';
+  for (const c of glob) {
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if ('.+^${}()|[]\\'.includes(c)) re += '\\' + c;
+    else re += c;
+  }
+  re += '$';
+  return new RegExp(re, 'i');
+}
+
+// ===========================================================================
+// MAIN
+// ===========================================================================
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const root = path.resolve(args.projectPath || process.cwd());
+
+  // Locate bundled rules relative to this script.
+  const defaultRulesDir = path.join(__dirname, '..', 'references', 'rules');
+  const rulesDir = args.rulesDir ? path.resolve(args.rulesDir) : defaultRulesDir;
+
+  let rules;
+  try {
+    rules = loadRules(rulesDir);
+  } catch (e) {
+    fail(args.json, `failed to load rule packs from ${toPosix(rulesDir)}: ${e && e.message ? e.message : e}`);
+    return;
+  }
+  // Make compiled secret rules available to the settings-secret scanner.
+  scanSettingsForSecrets._rules = rules.secrets;
+
+  // Verify root exists.
+  let rootStat;
+  try {
+    rootStat = fs.statSync(root);
+  } catch {
+    fail(args.json, `project path does not exist: ${toPosix(root)}`);
+    return;
+  }
+  if (!rootStat.isDirectory()) {
+    fail(args.json, `project path is not a directory: ${toPosix(root)}`);
+    return;
+  }
+
+  const access = {
+    filesScanned: 0,
+    bytesScanned: 0,
+    contentsReadIntoContext: 0,
+    skipped: { binary: 0, tooLarge: 0, ignored: 0, dirs: new Set() },
+    traversedAboveRoot: false,
+  };
+
+  // Build ignore matcher from .gitignore + .claudeignore at root.
+  const ignorePatterns = []
+    .concat(loadIgnoreFile(path.join(root, '.gitignore')))
+    .concat(loadIgnoreFile(path.join(root, '.claudeignore')));
+  // Always-skip metadata that should never be scanned for findings.
+  ignorePatterns.push('.git/');
+  const baseIgnore = makeIgnoreMatcher(ignorePatterns);
+  const ignoreMatcher = (rel, isDir) => baseIgnore(rel, isDir);
+
+  const findings = [];
+  const secretsFindings = []; // for correlation
+  const sensitiveFindings = [];
+
+  // -------------------------------------------------------------------------
+  // CONFIG MODULE
+  // -------------------------------------------------------------------------
+  const configResult = runConfigModule(root, args, rules.settingsChecks, findings);
+  const permPicture = configResult.permissions;
+  const configSources = configResult.configSources;
+
+  // -------------------------------------------------------------------------
+  // SECRETS + SENSITIVE MODULES (single tree walk)
+  // -------------------------------------------------------------------------
+  walk(root, ignoreMatcher, (abs, rel) => {
+    let buf;
+    try {
+      const st = fs.statSync(abs);
+      if (st.size > MAX_FILE_BYTES) { access.skipped.tooLarge++; return; }
+      buf = fs.readFileSync(abs);
+    } catch {
+      return;
+    }
+    if (looksBinary(buf)) { access.skipped.binary++; return; }
+
+    const text = buf.toString('utf8');
+    access.filesScanned++;
+    access.bytesScanned += buf.length;
+
+    scanSecrets(rel, text, rules.secrets, secretsFindings);
+    scanSensitive(abs, rel, text, rules.sensitive, sensitiveFindings);
+  }, access);
+
+  // Append module findings.
+  for (const f of secretsFindings) findings.push(f);
+  for (const f of sensitiveFindings) findings.push(f);
+
+  // -------------------------------------------------------------------------
+  // CORRELATION MODULE
+  // -------------------------------------------------------------------------
+  runCorrelation(secretsFindings, sensitiveFindings, permPicture, rules.settingsChecks, findings);
+
+  // -------------------------------------------------------------------------
+  // SCORING
+  // -------------------------------------------------------------------------
+  const summary = computeScore(findings);
+
+  // -------------------------------------------------------------------------
+  // ASSEMBLE OUTPUT
+  // -------------------------------------------------------------------------
+  const output = {
+    fantasiaVersion: FANTASIA_VERSION,
+    scannedRoot: toPosix(root),
+    access: {
+      filesScanned: access.filesScanned,
+      bytesScanned: access.bytesScanned,
+      contentsReadIntoContext: 0,
+      skipped: {
+        binary: access.skipped.binary,
+        tooLarge: access.skipped.tooLarge,
+        ignored: access.skipped.ignored,
+        dirs: Array.from(access.skipped.dirs).sort(),
+      },
+      traversedAboveRoot: false,
+    },
+    configSources,
+    summary,
+    findings,
+  };
+
+  // -------------------------------------------------------------------------
+  // FINAL SAFETY PASS — assert no raw secret leaks into serialized output
+  // -------------------------------------------------------------------------
+  let serialized = JSON.stringify(output, null, 2);
+  serialized = enforceRedaction(serialized, secretsFindings, sensitiveFindings, output);
+
+  if (args.json) {
+    process.stdout.write(serialized + '\n');
+  } else {
+    process.stdout.write(renderHuman(output) + '\n');
+  }
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// CONFIG MODULE implementation
+// ---------------------------------------------------------------------------
+
+function runConfigModule(root, args, settingsChecks, findings) {
+  const checkById = Object.create(null);
+  for (const c of settingsChecks.checks) checkById[c.id] = c;
+
+  const configSources = [];
+  const settingsScopes = []; // { scope, file(rel-ish display), data, text }
+
+  const addSource = (absPath, scope, displayPath) => {
+    const exists = fs.existsSync(absPath);
+    configSources.push({ path: displayPath, scope, exists });
+    return exists;
+  };
+
+  const projectSettings = path.join(root, '.claude', 'settings.json');
+  const projectLocal = path.join(root, '.claude', 'settings.local.json');
+  const homedir = os.homedir();
+  const userSettings = path.join(homedir, '.claude', 'settings.json');
+  const managed = managedSettingsPath();
+
+  // Display paths: project files relative to root; user/managed as ~ / absolute.
+  const dispProject = '.claude/settings.json';
+  const dispLocal = '.claude/settings.local.json';
+  const dispUser = '~/.claude/settings.json';
+
+  addSource(projectSettings, 'project', dispProject);
+  addSource(projectLocal, 'projectLocal', dispLocal);
+  if (args.userConfig) addSource(userSettings, 'user', dispUser);
+  if (managed) addSource(managed.path, 'managed', managed.display);
+
+  // Load each existing scope.
+  const loadScope = (absPath, scope, disp) => {
+    const r = safeReadJson(absPath);
+    if (r.ok) settingsScopes.push({ scope, file: disp, data: r.data, text: r.text, abs: absPath });
+  };
+  loadScope(projectSettings, 'project', dispProject);
+  loadScope(projectLocal, 'projectLocal', dispLocal);
+  if (args.userConfig) loadScope(userSettings, 'user', dispUser);
+  if (managed) loadScope(managed.path, 'managed', managed.display);
+
+  // Build effective permission picture (precedence: managed > local > project > user;
+  // for the audit we union allow/deny across scopes — any scope that grants a
+  // capability makes it reachable, which is the conservative posture for risk).
+  const permissions = { allow: [], deny: [], ask: [], byScope: {} };
+  for (const s of settingsScopes) {
+    const perms = (s.data && s.data.permissions) || {};
+    permissions.byScope[s.scope] = perms;
+    for (const a of perms.allow || []) permissions.allow.push({ rule: a, scope: s.scope, file: s.file });
+    for (const d of perms.deny || []) permissions.deny.push({ rule: d, scope: s.scope, file: s.file });
+    for (const k of perms.ask || []) permissions.ask.push({ rule: k, scope: s.scope, file: s.file });
+  }
+
+  const emit = (id, extra) => {
+    const c = checkById[id];
+    if (!c) return;
+    findings.push(makeFinding(Object.assign({
+      id: c.id,
+      title: c.title,
+      dimension: c.dimension,
+      severity: c.severity,
+      file: extra && extra.file != null ? extra.file : null,
+      line: extra && extra.line != null ? extra.line : null,
+      why: c.why,
+      fix: c.fix,
+      evidence: extra && extra.evidence ? extra.evidence : interpolate(c.detect, extra),
+    }, extra && extra.override ? extra.override : {})));
+  };
+
+  // ----- C. Loose security settings (per scope, attributed to source) -----
+  for (const s of settingsScopes) {
+    const d = s.data || {};
+    const perms = d.permissions || {};
+
+    // defaultMode checks
+    const mode = d.defaultMode || (perms && perms.defaultMode);
+    if (mode === 'bypassPermissions') {
+      emit('mode-bypass-permissions', { file: s.file, line: findLine(s.text, 'bypassPermissions'),
+        evidence: `settings \`defaultMode\` is "bypassPermissions" in ${s.file}`,
+        override: { autoFixable: true } });
+    } else if (mode === 'auto') {
+      emit('mode-auto', { file: s.file, line: findLine(s.text, '"auto"'),
+        evidence: `settings \`defaultMode\` is "auto" in ${s.file}`, override: { autoFixable: true } });
+    } else if (mode === 'acceptEdits') {
+      emit('mode-accept-edits-persisted', { file: s.file, line: findLine(s.text, 'acceptEdits'),
+        evidence: `settings \`defaultMode\` is "acceptEdits" persisted in ${s.file}`, override: { autoFixable: true } });
+    }
+
+    // skipWebFetchPreflight
+    if (d.skipWebFetchPreflight === true) {
+      emit('webfetch-preflight-off', { file: s.file, line: findLine(s.text, 'skipWebFetchPreflight'),
+        evidence: `settings has \`skipWebFetchPreflight: true\` in ${s.file}`, override: { autoFixable: true } });
+    }
+
+    // additionalDirectories breadth
+    const addDirs = d.additionalDirectories || d.additionalDirs || [];
+    if (Array.isArray(addDirs)) {
+      for (const dir of addDirs) {
+        if (isBroadDir(dir)) {
+          emit('additional-dirs-broad', { file: s.file, line: findLine(s.text, String(dir)),
+            evidence: `settings \`additionalDirectories\` includes broad path "${dir}" in ${s.file}` });
+          break;
+        }
+      }
+    }
+
+    // permissions.allow analysis
+    for (const rule of perms.allow || []) {
+      analyzeAllowRule(rule, s, emit);
+    }
+
+    // hooks declared in settings
+    if (d.hooks && typeof d.hooks === 'object') {
+      const hookEvidence = describeHooks(d.hooks);
+      if (hookEvidence) {
+        emit('opaque-hook', { file: s.file, line: findLine(s.text, 'hooks'),
+          evidence: `${hookEvidence} declared in ${s.file}` });
+      }
+    }
+
+    // ----- D. Privacy: telemetry env state + cleanupPeriodDays -----
+    const env = d.env || {};
+    const telemetryKeys = ['DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_FEEDBACK_COMMAND', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+    const telemetryState = telemetryKeys
+      .map((k) => `${k}=${env[k] === undefined ? 'unset' : env[k]}`)
+      .join(', ');
+    // Only emit telemetry-state once, attributed to whichever scope defines env,
+    // or to the highest-precedence existing settings file otherwise.
+    if (d.env !== undefined) {
+      emit('telemetry-state', { file: s.file, line: findLine(s.text, 'env'),
+        evidence: `telemetry/reporting env in ${s.file}: ${telemetryState}`,
+        override: { redactedMatch: null } });
+    }
+
+    // cleanupPeriodDays note (local transcripts)
+    if (d.cleanupPeriodDays !== undefined) {
+      emit('local-transcripts', { file: s.file, line: findLine(s.text, 'cleanupPeriodDays'),
+        evidence: `\`cleanupPeriodDays\` = ${d.cleanupPeriodDays} in ${s.file} (transcripts kept under ~/.claude/projects/)` });
+    }
+
+    // secret-in-settings: scan the raw settings text for secret values
+    scanSettingsForSecrets(s, findings);
+  }
+
+  // no-secret-deny-rules — does any deny rule cover .env / secrets / ssh?
+  const hasSecretDeny = permissions.deny.some((d) => looksLikeSecretDeny(d.rule));
+  if (!hasSecretDeny) {
+    const anySettings = settingsScopes.find((s) => s.scope === 'project') || settingsScopes[0];
+    const c = checkById['no-secret-deny-rules'];
+    findings.push(makeFinding({
+      id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+      file: anySettings ? anySettings.file : null, line: null,
+      why: c.why, fix: c.fix, autoFixable: true,
+      evidence: 'no permissions.deny Read rule covering .env / secrets / ssh keys was found across the loaded settings scopes',
+    }));
+  }
+
+  // sandbox-off — report-only info (we cannot reliably detect sandbox locally)
+  {
+    const sandboxOn = settingsScopes.some((s) => s.data && (s.data.sandbox || (s.data.permissions && s.data.permissions.sandbox)));
+    if (!sandboxOn) {
+      const c = checkById['sandbox-off'];
+      findings.push(makeFinding({
+        id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+        file: null, line: null, why: c.why, fix: c.fix,
+        evidence: 'no sandbox configuration was detected in the loaded settings (OS-level sandbox appears off)',
+      }));
+    }
+  }
+
+  // ----- MCP inventory (.mcp.json) -----
+  runMcpChecks(root, settingsChecks, permissions, checkById, findings);
+
+  // ----- Hooks file (.claude/hooks/hooks.json) -----
+  runHooksFileCheck(root, checkById, findings);
+
+  // ----- E. Context hygiene -----
+  runContextChecks(root, checkById, findings);
+
+  return { configSources, permissions };
+}
+
+function interpolate(template, extra) {
+  if (!template) return '';
+  let s = template;
+  if (extra && extra.file != null) s = s.replace(/\{file\}/g, extra.file);
+  if (extra && extra.value != null) s = s.replace(/\{value\}/g, String(extra.value));
+  return s;
+}
+
+function isBroadDir(dir) {
+  if (typeof dir !== 'string') return false;
+  const d = dir.trim();
+  if (d === '~' || d === '/' || d === '~/' || d === '\\' || d === os.homedir()) return true;
+  // Home root or filesystem root or a single-segment top-level.
+  if (/^[A-Za-z]:[\\/]?$/.test(d)) return true; // C:\ etc
+  if (d === '..' || d.startsWith('../..')) return true;
+  return false;
+}
+
+function looksLikeSecretDeny(rule) {
+  if (typeof rule !== 'string') return false;
+  if (!/^Read\(/i.test(rule)) return false;
+  const lower = rule.toLowerCase();
+  return /\.env|\.pem|id_rsa|\.ssh|secret|credential/.test(lower);
+}
+
+function analyzeAllowRule(rule, scope, emit) {
+  if (typeof rule !== 'string') return;
+  const file = scope.file;
+  // Prefer the quoted form so we land on the array entry, not a substring
+  // collision elsewhere (e.g. "WebFetch" vs "skipWebFetchPreflight").
+  const line = findLine(scope.text, '"' + rule + '"') || findLine(scope.text, rule);
+  const evBase = (txt) => `${txt} in settings \`permissions.allow\` (${file})`;
+
+  // Bash wide open
+  if (rule === 'Bash' || rule === 'Bash(*)' || /^Bash\(\s*\*\s*\)$/.test(rule)) {
+    emit('bash-wide-open', { file, line, evidence: evBase(`\`${rule}\``), override: { autoFixable: true } });
+    return;
+  }
+  // mcp wide open
+  if (rule === 'mcp__*' || /^mcp__\*$/.test(rule) || rule === 'mcp' || /^mcp__[^_]+__\*$/.test(rule)) {
+    emit('mcp-wide-open', { file, line, evidence: evBase(`\`${rule}\``) });
+    return;
+  }
+  // WebFetch all domains
+  if (rule === 'WebFetch' || /^WebFetch\(\s*\*\s*\)$/.test(rule)) {
+    emit('webfetch-all-domains', { file, line, evidence: evBase(`bare \`${rule}\``) });
+    return;
+  }
+
+  const bashInner = /^Bash\((.*)\)$/.exec(rule);
+  if (bashInner) {
+    const inner = bashInner[1].trim();
+    // network commands
+    if (/^(curl|wget)\b/.test(inner) || /\b(curl|wget)\b/.test(inner)) {
+      // arg-constrained network rule is both network AND fragile
+      emit('network-bash-allowed', { file, line, evidence: evBase(`\`${rule}\``), override: { autoFixable: true } });
+      if (!/^\s*(curl|wget)\s*\*?\s*$/.test(inner) && inner.length > 6 && !/^\S+\s+\*$/.test(inner)) {
+        emit('fragile-arg-rule', { file, line, evidence: evBase(`argument-constraining rule \`${rule}\``) });
+      }
+      return;
+    }
+    // env runners
+    if (/^(npx|uvx|docker\s+exec|devbox\s+run|bunx|pnpm\s+dlx)\b/.test(inner)) {
+      emit('env-runner-allowed', { file, line, evidence: evBase(`runner rule \`${rule}\``) });
+      return;
+    }
+    // fragile arg rule (constrains args but not a network/runner command)
+    if (/\s/.test(inner) && /[^*\s]\s+\S*\*/.test(inner) && !/^\S+$/.test(inner)) {
+      // e.g. Bash(some-cmd http://x/ *)
+      if (/https?:\/\//.test(inner) || /\s\*$/.test(inner)) {
+        emit('fragile-arg-rule', { file, line, evidence: evBase(`argument-constraining rule \`${rule}\``) });
+      }
+    }
+  }
+}
+
+function describeHooks(hooks) {
+  // hooks may be { PreToolUse: [...], PostToolUse: [...] } etc.
+  const events = Object.keys(hooks).filter((k) => Array.isArray(hooks[k]) || typeof hooks[k] === 'object');
+  let runsShell = false;
+  const eventNames = [];
+  for (const ev of events) {
+    eventNames.push(ev);
+    const arr = Array.isArray(hooks[ev]) ? hooks[ev] : [];
+    for (const item of arr) {
+      const inner = (item && item.hooks) || [item];
+      for (const h of (Array.isArray(inner) ? inner : [inner])) {
+        if (h && (h.type === 'command' || typeof h.command === 'string')) runsShell = true;
+      }
+    }
+  }
+  if (!runsShell && events.length === 0) return null;
+  return `${runsShell ? 'a shell-command hook' : 'a hook'} on ${eventNames.join('/') || 'tool calls'}`;
+}
+
+function managedSettingsPath() {
+  // Best-effort, report-only. Documented managed-settings locations by platform.
+  const plat = process.platform;
+  let p = null, display = null;
+  if (plat === 'darwin') {
+    p = '/Library/Application Support/ClaudeCode/managed-settings.json';
+    display = p;
+  } else if (plat === 'win32') {
+    p = 'C:\\ProgramData\\ClaudeCode\\managed-settings.json';
+    display = toPosix(p);
+  } else {
+    p = '/etc/claude-code/managed-settings.json';
+    display = p;
+  }
+  return { path: p, display };
+}
+
+function runMcpChecks(root, settingsChecks, permissions, checkById, findings) {
+  const mcpPath = path.join(root, '.mcp.json');
+  const r = safeReadJson(mcpPath);
+  if (!r.ok) return;
+  const servers = (r.data && (r.data.mcpServers || r.data.servers)) || {};
+  const names = Object.keys(servers);
+  if (names.length === 0) return;
+
+  // mcp-write-capable: heuristically flag connectors that can act in the world.
+  const writeIndicators = /(gmail|email|mail|slack|stripe|mercury|quickbook|payment|bank|delete|send|notion|drive|calendar|pandadoc|attio|github|sql|postgres|mysql)/i;
+  const flagged = [];
+  for (const name of names) {
+    const srv = servers[name] || {};
+    const blob = (name + ' ' + JSON.stringify(srv)).toLowerCase();
+    if (writeIndicators.test(blob)) flagged.push(name);
+  }
+  if (flagged.length) {
+    const c = checkById['mcp-write-capable'];
+    findings.push(makeFinding({
+      id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+      file: '.mcp.json', line: findLine(r.text, flagged[0]),
+      why: c.why, fix: c.fix,
+      evidence: `\`.mcp.json\` declares connector(s) that may take real-world actions: ${flagged.join(', ')}`,
+    }));
+  }
+
+  // secret values inside .mcp.json (e.g. env tokens) — treat as secret-in-settings.
+  scanSettingsForSecrets({ scope: 'project', file: '.mcp.json', text: r.text }, findings);
+}
+
+function runHooksFileCheck(root, checkById, findings) {
+  const hooksFile = path.join(root, '.claude', 'hooks', 'hooks.json');
+  const r = safeReadJson(hooksFile);
+  if (!r.ok) return;
+  const desc = describeHooks(r.data || {});
+  if (desc) {
+    const c = checkById['opaque-hook'];
+    findings.push(makeFinding({
+      id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+      file: '.claude/hooks/hooks.json', line: 1,
+      why: c.why, fix: c.fix,
+      evidence: `${desc} declared in .claude/hooks/hooks.json`,
+    }));
+  }
+}
+
+function runContextChecks(root, checkById, findings) {
+  const candidates = [
+    path.join(root, 'CLAUDE.md'),
+    path.join(root, 'AGENTS.md'),
+  ];
+  const present = candidates.filter((p) => fs.existsSync(p));
+  const claudeMd = path.join(root, 'CLAUDE.md');
+  const agentsMd = path.join(root, 'AGENTS.md');
+  const hasClaude = fs.existsSync(claudeMd);
+  const hasAgents = fs.existsSync(agentsMd);
+
+  // Find nested CLAUDE.md (shallow scan, skip heavy dirs).
+  const nested = findNestedClaudeMd(root);
+
+  // no-claude-md
+  if (!hasClaude && !hasAgents) {
+    const c = checkById['no-claude-md'];
+    findings.push(makeFinding({
+      id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+      file: null, line: null, why: c.why, fix: c.fix,
+      evidence: 'no CLAUDE.md or AGENTS.md found in the project root',
+    }));
+  }
+
+  // claude-md-bloated (> ~24KB or > ~600 lines is a reasonable always-loaded guideline)
+  for (const p of present) {
+    try {
+      const txt = fs.readFileSync(p, 'utf8');
+      const lines = txt.split(/\r?\n/).length;
+      const bytes = Buffer.byteLength(txt, 'utf8');
+      if (bytes > 24 * 1024 || lines > 600) {
+        const c = checkById['claude-md-bloated'];
+        findings.push(makeFinding({
+          id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+          file: relPosix(root, p), line: null, why: c.why, fix: c.fix,
+          evidence: `${relPosix(root, p)} is ${Math.round(bytes / 1024)}KB / ${lines} lines (over the always-loaded size guideline)`,
+        }));
+      }
+    } catch { /* ignore */ }
+  }
+
+  // claude-md-conflicts (both CLAUDE.md and AGENTS.md, or multiple nested)
+  if ((hasClaude && hasAgents) || nested.length > 1) {
+    const c = checkById['claude-md-conflicts'];
+    const detail = [];
+    if (hasClaude && hasAgents) detail.push('both CLAUDE.md and AGENTS.md present in root');
+    if (nested.length > 1) detail.push(`${nested.length} nested CLAUDE.md files`);
+    findings.push(makeFinding({
+      id: c.id, title: c.title, dimension: c.dimension, severity: c.severity,
+      file: null, line: null, why: c.why, fix: c.fix,
+      evidence: detail.join('; '),
+    }));
+  }
+}
+
+function findNestedClaudeMd(root) {
+  const found = [];
+  const stack = [root];
+  let budget = 4000; // cap directory visits
+  while (stack.length && budget-- > 0) {
+    const dir = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        if (ALWAYS_SKIP_DIRS.has(ent.name)) continue;
+        stack.push(path.join(dir, ent.name));
+      } else if (ent.name === 'CLAUDE.md') {
+        found.push(path.join(dir, ent.name));
+      }
+    }
+  }
+  return found;
+}
+
+// Scan a settings file's RAW TEXT for secret values; emit secret-in-settings.
+function scanSettingsForSecrets(scope, findings) {
+  if (!scope || !scope.text) return;
+  const rules = scanSettingsForSecrets._rules;
+  if (!rules) return;
+  const seen = new Set();
+  for (const rule of rules.rules) {
+    if (!keywordHit(scope.text, rule.keywords)) continue;
+    rule._re.lastIndex = 0;
+    let m;
+    while ((m = rule._re.exec(scope.text)) !== null) {
+      const raw = pickSecret(m, rule);
+      if (!raw) { if (m.index === rule._re.lastIndex) rule._re.lastIndex++; continue; }
+      if (rule.entropy && shannonEntropy(raw) < rule.entropy) continue;
+      const key = rule.id + ':' + raw;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const line = offsetToLine(scope.text, m.index);
+      findings.push(makeFinding({
+        id: 'secret-in-settings',
+        title: 'A secret value is sitting inside a settings file',
+        dimension: 'exposure',
+        severity: 'critical',
+        file: scope.file,
+        line,
+        redactedMatch: redact(raw),
+        why: 'A credential stored literally inside a settings/config file is read every time the file loads, and is easy to commit by accident.',
+        fix: 'Move the value to an environment variable or use apiKeyHelper; never commit the literal secret. Then rotate the exposed credential.',
+        evidence: `matched secret rule \`${rule.id}\` inside ${scope.file}`,
+        autoFixable: false,
+        reachable: true,
+        _raw: raw,
+      }));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SECRETS MODULE
+// ---------------------------------------------------------------------------
+
+function keywordHit(text, keywords) {
+  if (!keywords || keywords.length === 0) return true;
+  const lower = text.toLowerCase();
+  for (const k of keywords) {
+    if (lower.includes(k)) return true;
+  }
+  return false;
+}
+
+function pickSecret(match, rule) {
+  const grp = rule.secretGroup === undefined ? 0 : rule.secretGroup;
+  const val = match[grp];
+  return val == null ? null : val;
+}
+
+function scanSecrets(rel, text, secretsPack, out) {
+  for (const rule of secretsPack.rules) {
+    if (!keywordHit(text, rule.keywords)) continue;
+    if (rule.path) {
+      try { if (!new RegExp(rule.path).test(rel)) continue; } catch { /* ignore */ }
+    }
+    rule._re.lastIndex = 0;
+    let m;
+    let guard = 0;
+    while ((m = rule._re.exec(text)) !== null) {
+      if (guard++ > 100000) break;
+      const raw = pickSecret(m, rule);
+      if (raw == null || raw.length === 0) {
+        if (m.index === rule._re.lastIndex) rule._re.lastIndex++;
+        continue;
+      }
+      if (rule.entropy && shannonEntropy(raw) < rule.entropy) {
+        if (m.index === rule._re.lastIndex) rule._re.lastIndex++;
+        continue;
+      }
+      const line = offsetToLine(text, m.index);
+      out.push(makeFinding({
+        id: secretIdFor(rule),
+        title: secretTitleFor(rule),
+        dimension: 'exposure',
+        severity: severityForSecret(rule),
+        file: rel,
+        line,
+        redactedMatch: redact(raw),
+        why: whyForSecret(rule),
+        fix: fixForSecret(rule),
+        evidence: secretEvidence(rule, raw),
+        autoFixable: false,
+        reachable: null, // set by correlation
+        _raw: raw, // internal only; stripped before output
+      }));
+      if (m.index === rule._re.lastIndex) rule._re.lastIndex++;
+    }
+  }
+}
+
+function secretIdFor(rule) {
+  if (rule.tags && rule.tags.includes('private-key')) return 'private-key-present';
+  return 'secret-in-readable-file';
+}
+function secretTitleFor(rule) {
+  if (rule.tags && rule.tags.includes('private-key')) return 'A private key is present in a readable file';
+  return 'A secret is sitting in a readable file';
+}
+function severityForSecret(rule) {
+  return 'critical';
+}
+function whyForSecret(rule) {
+  if (rule.tags && rule.tags.includes('private-key')) {
+    return 'A private key in the project can be read by Claude and anything it runs, and used to impersonate you or decrypt data.';
+  }
+  return 'A credential in a readable file can be read by Claude, a subagent, or anything Claude runs — and then used or leaked.';
+}
+function fixForSecret(rule) {
+  if (rule.tags && rule.tags.includes('private-key')) {
+    return 'Relocate the key outside the project (or add a Read deny rule for it), and rotate it.';
+  }
+  return 'Move the value to an environment variable, add a Read deny rule covering this file, and rotate the exposed credential.';
+}
+function secretEvidence(rule, raw) {
+  if (rule.entropy) {
+    return `matched rule \`${rule.id}\` (regex + entropy ${shannonEntropy(raw).toFixed(1)})`;
+  }
+  return `matched rule \`${rule.id}\` (regex)`;
+}
+
+// ---------------------------------------------------------------------------
+// SENSITIVE MODULE
+// ---------------------------------------------------------------------------
+
+function scanSensitive(abs, rel, text, sensitivePack, out) {
+  const base = path.basename(rel);
+  for (const cat of sensitivePack.categories) {
+    let fnameMatch = null;
+    if (Array.isArray(cat.filenameGlobs)) {
+      for (const g of cat.filenameGlobs) {
+        if (basenameGlobToRegExp(g).test(base)) { fnameMatch = g; break; }
+      }
+    }
+
+    // pattern matches
+    let patternHit = null; // { id, offset, raw }
+    if (Array.isArray(cat.patterns)) {
+      for (const pat of cat.patterns) {
+        pat._re.lastIndex = 0;
+        const m = pat._re.exec(text);
+        if (m) { patternHit = { id: pat.id, offset: m.index, raw: m[0] }; break; }
+      }
+    }
+
+    // keyword hits (distinct)
+    const lower = text.toLowerCase();
+    const hitKeywords = [];
+    for (const k of cat.keywords || []) {
+      if (lower.includes(k)) hitKeywords.push(k);
+    }
+    const minHits = cat.minKeywordHits || 2;
+    const keywordTriggered = hitKeywords.length >= minHits;
+
+    if (!fnameMatch && !patternHit && !keywordTriggered) continue;
+
+    // Build redacted snippet + evidence + line.
+    let line = null;
+    let snippet = null;
+    const evidenceParts = [];
+    if (fnameMatch) evidenceParts.push(`filename matches \`${fnameMatch}\``);
+    if (patternHit) {
+      line = offsetToLine(text, patternHit.offset);
+      snippet = redactSnippet(lineAt(text, patternHit.offset), patternHit.raw);
+      evidenceParts.push(`pattern \`${patternHit.id}\` matched`);
+    }
+    if (keywordTriggered) {
+      const shown = hitKeywords.slice(0, 3).map((k) => `"${k}"`).join(', ');
+      evidenceParts.push(`keywords present: ${shown}${hitKeywords.length > 3 ? ', …' : ''}`);
+      if (line == null) {
+        // anchor line to first keyword occurrence
+        const idx = lower.indexOf(hitKeywords[0]);
+        if (idx >= 0) line = offsetToLine(text, idx);
+      }
+    }
+
+    out.push(makeFinding({
+      id: cat.id,
+      title: sensitiveTitle(cat.category),
+      dimension: 'exposure',
+      severity: cat.severity || 'medium',
+      file: rel,
+      line,
+      redactedMatch: snippet,
+      why: sensitiveWhy(cat.category),
+      fix: 'Fence this off: add a Read deny rule and a .claudeignore entry covering it, or move it out of the project.',
+      evidence: `${cat.category}: ${evidenceParts.join('; ')}`,
+      autoFixable: false,
+      reachable: null,
+      _rawSnippetSource: patternHit ? patternHit.raw : null,
+    }));
+  }
+}
+
+function sensitiveTitle(category) {
+  if (category === 'financial') return 'A file looks like it contains financial information';
+  if (category === 'medical') return 'A file looks like it contains medical / health information';
+  return 'A file looks like it contains legal / personal information';
+}
+function sensitiveWhy(category) {
+  return `This file appears to hold ${category} information. An agent (or a 1,000-subagent swarm) reading it widens your exposure even though it is not a credential.`;
+}
+
+// Redact a snippet: keep surrounding words but mask the matched sensitive token.
+function redactSnippet(lineText, rawMatch) {
+  if (!lineText) return null;
+  let snippet = lineText.trim();
+  if (snippet.length > 120) snippet = snippet.slice(0, 117) + '…';
+  if (rawMatch) {
+    const red = redact(rawMatch);
+    snippet = snippet.split(rawMatch).join(red);
+  }
+  return snippet;
+}
+
+// ---------------------------------------------------------------------------
+// CORRELATION MODULE
+// ---------------------------------------------------------------------------
+
+function runCorrelation(secretsFindings, sensitiveFindings, permPicture, settingsChecks, findings) {
+  const denyRules = (permPicture.deny || []).map((d) => d.rule).filter((r) => typeof r === 'string');
+  const allowRules = (permPicture.allow || []).map((a) => a.rule).filter((r) => typeof r === 'string');
+
+  // Is Bash broadly allowed or are network commands allowed?
+  const bashBroad = allowRules.some((r) => r === 'Bash' || /^Bash\(\s*\*\s*\)$/.test(r));
+  const networkAllowed = allowRules.some((r) => /^Bash\((curl|wget)\b/.test(r));
+  const runnerAllowed = allowRules.some((r) => /^Bash\((npx|uvx|docker\s+exec|devbox\s+run|bunx)\b/.test(r));
+  const broadAccess = bashBroad || networkAllowed || runnerAllowed;
+
+  const checkById = Object.create(null);
+  for (const c of settingsChecks.checks) checkById[c.id] = c;
+
+  const all = secretsFindings.concat(sensitiveFindings);
+  for (const f of all) {
+    const covered = f.file != null && isCoveredByReadDeny(f.file, denyRules);
+    // reachable = not covered by a Read deny (Claude could open it directly),
+    // OR broad access exists (a script could read it regardless of deny).
+    const reachable = !covered || broadAccess;
+    f.reachable = reachable;
+
+    // Headline finding: a real exposure that is reachable and not denied.
+    if (reachable && !covered) {
+      const sev = 'critical';
+      const channel = networkAllowed
+        ? 'curl/wget are pre-approved'
+        : (bashBroad ? 'Bash is broadly allowed' : (runnerAllowed ? 'an indirect command runner is allowed' : 'no Read deny rule covers it'));
+      findings.push(makeFinding({
+        id: 'reachable-secret',
+        title: 'Exposed data is actually reachable by Claude',
+        dimension: 'exposure',
+        severity: sev,
+        file: f.file,
+        line: f.line,
+        redactedMatch: f.redactedMatch,
+        why: `\`${f.file}\` holds ${exposureNoun(f)}, there is no Read deny rule covering it${broadAccess ? `, and ${channel}` : ''} — so Claude, a subagent, or a prompt injection could read it${networkAllowed || bashBroad || runnerAllowed ? ' and send it off the machine' : ''}.`,
+        fix: 'One-line combined fix: add a Read deny rule for this path (snippet in the no-secret-deny-rules finding), move the value to an env var, and for airtight protection enable the OS sandbox. Then rotate any exposed credential.',
+        evidence: `correlation: finding \`${f.id}\` on \`${f.file}\` is not covered by any permissions.deny Read rule${broadAccess ? `, and ${channel}` : ''}`,
+        autoFixable: false,
+        reachable: true,
+      }));
+    }
+  }
+}
+
+function exposureNoun(f) {
+  if (f.id === 'private-key-present') return 'a private key';
+  if (f.id === 'secret-in-readable-file' || f.id === 'secret-in-settings') return 'a live credential';
+  if (f.id === 'sensitive-financial') return 'financial information';
+  if (f.id === 'sensitive-medical') return 'medical information';
+  if (f.id === 'sensitive-legal-pii') return 'legal/personal information';
+  return 'sensitive data';
+}
+
+// Does a Read deny rule cover this POSIX-relative path? Conservative glob match.
+function isCoveredByReadDeny(relFile, denyRules) {
+  const candidates = [relFile, './' + relFile, path.basename(relFile)];
+  for (const rule of denyRules) {
+    const m = /^Read\((.*)\)$/i.exec(rule.trim());
+    if (!m) continue;
+    const glob = m[1].trim();
+    if (readGlobMatches(glob, relFile)) return true;
+  }
+  return false;
+}
+
+function readGlobMatches(glob, relFile) {
+  let g = glob;
+  // Normalize: drop leading ./ ; treat ~ as non-matching for project files.
+  if (g.startsWith('~')) return false;
+  if (g.startsWith('./')) g = g.slice(2);
+  // Build regex: ** => any incl slashes, * => non-slash, ? => single non-slash.
+  let re = '^';
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === '*') {
+      if (g[i + 1] === '*') {
+        i++;
+        if (g[i + 1] === '/') { i++; re += '(?:.*/)?'; }
+        else re += '.*';
+      } else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else if ('.+^${}()|[]\\'.includes(c)) re += '\\' + c;
+    else re += c;
+  }
+  re += '$';
+  let rx;
+  try { rx = new RegExp(re); } catch { return false; }
+  return rx.test(relFile) || rx.test(path.basename(relFile)) || rx.test('./' + relFile);
+}
+
+// ---------------------------------------------------------------------------
+// SCORING
+// ---------------------------------------------------------------------------
+
+function computeScore(findings) {
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of findings) {
+    if (counts[f.severity] !== undefined) counts[f.severity]++;
+  }
+
+  // Per-dimension penalty accumulation.
+  const weights = { critical: 40, high: 18, medium: 8, low: 3, info: 0 };
+  const dims = ['exposure', 'permissions', 'privacy', 'context', 'leverage'];
+  const dimPenalty = {};
+  const dimHasCritical = {};
+  for (const d of dims) { dimPenalty[d] = 0; dimHasCritical[d] = false; }
+  for (const f of findings) {
+    if (dimPenalty[f.dimension] === undefined) continue;
+    dimPenalty[f.dimension] += weights[f.severity] || 0;
+    if (f.severity === 'critical') dimHasCritical[f.dimension] = true;
+  }
+
+  const grades = {};
+  for (const d of dims) {
+    grades[d] = penaltyToGrade(dimPenalty[d], dimHasCritical[d]);
+  }
+
+  // Overall score. Safety = exposure+permissions+privacy; Setup = context+leverage.
+  const safetyPenalty = dimPenalty.exposure + dimPenalty.permissions + dimPenalty.privacy;
+  const setupPenalty = dimPenalty.context + dimPenalty.leverage;
+  let score = 100 - Math.min(safetyPenalty, 100) * 0.75 - Math.min(setupPenalty, 100) * 0.25;
+  // Critical findings cap the Safety side: hard ceiling while criticals exist.
+  if (counts.critical > 0) score = Math.min(score, 45);
+  else if (counts.high > 0) score = Math.min(score, 75);
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  return { score, grades, counts };
+}
+
+function penaltyToGrade(penalty, hasCritical) {
+  if (hasCritical) return 'F';
+  if (penalty <= 0) return 'A';
+  if (penalty <= 8) return 'B';
+  if (penalty <= 20) return 'C';
+  if (penalty <= 40) return 'D';
+  return 'F';
+}
+
+// ---------------------------------------------------------------------------
+// FINAL SAFETY PASS — enforce redaction on the serialized output
+// ---------------------------------------------------------------------------
+
+function enforceRedaction(serialized, secretsFindings, sensitiveFindings, output) {
+  // Collect every raw secret/snippet that was ever captured.
+  const raws = [];
+  const collect = (arr) => {
+    for (const f of arr) {
+      if (f._raw) raws.push(f._raw);
+      if (f._rawSnippetSource) raws.push(f._rawSnippetSource);
+    }
+  };
+  collect(secretsFindings);
+  collect(sensitiveFindings);
+  // Also include any _raw on reachable-secret / secret-in-settings findings.
+  for (const f of output.findings) {
+    if (f._raw) raws.push(f._raw);
+  }
+
+  let leaked = false;
+  for (const raw of raws) {
+    if (!raw || String(raw).length < 6) continue; // too short to be a meaningful leak
+    if (serialized.includes(raw)) {
+      leaked = true;
+      // Redact harder: replace any occurrence with a hard-redacted form.
+      const replacement = redact(raw);
+      serialized = serialized.split(raw).join(replacement);
+    }
+  }
+
+  // Defensive: strip any leftover internal-only fields if they somehow serialized.
+  // (We never put _raw onto the public objects, but assert it here.)
+  if (/"_raw"|"_rawSnippetSource"/.test(serialized)) {
+    const obj = JSON.parse(serialized);
+    stripInternal(obj);
+    serialized = JSON.stringify(obj, null, 2);
+  }
+
+  // Re-assert: if a leak somehow persisted, this is an operational failure.
+  for (const raw of raws) {
+    if (raw && String(raw).length >= 6 && serialized.includes(raw)) {
+      // As a last resort, scrub by global replace; should be unreachable.
+      serialized = serialized.split(raw).join('[REDACTED]');
+    }
+  }
+
+  return serialized;
+}
+
+function stripInternal(node) {
+  if (Array.isArray(node)) { node.forEach(stripInternal); return; }
+  if (node && typeof node === 'object') {
+    delete node._raw;
+    delete node._rawSnippetSource;
+    for (const k of Object.keys(node)) stripInternal(node[k]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human-readable rendering (non --json mode)
+// ---------------------------------------------------------------------------
+
+function renderHuman(output) {
+  const lines = [];
+  lines.push(`fantasia ${output.fantasiaVersion} — scan of ${output.scannedRoot}`);
+  lines.push('');
+  lines.push(`Score: ${output.summary.score}/100`);
+  const g = output.summary.grades;
+  lines.push(`  Safety   — exposure ${g.exposure}  permissions ${g.permissions}  privacy ${g.privacy}`);
+  lines.push(`  Setup    — context ${g.context}  leverage ${g.leverage}`);
+  const c = output.summary.counts;
+  lines.push(`Findings: ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.low} low, ${c.info} info`);
+  lines.push('');
+  lines.push(`Scanned ${output.access.filesScanned} files (${output.access.bytesScanned} bytes); read 0 file contents into the conversation.`);
+  lines.push(`Skipped: ${output.access.skipped.binary} binary, ${output.access.skipped.tooLarge} too-large, ${output.access.skipped.ignored} ignored. Never traversed above root.`);
+  lines.push('');
+  for (const f of output.findings) {
+    const loc = f.file ? `${f.file}${f.line ? ':' + f.line : ''}` : '(config)';
+    lines.push(`[${f.severity.toUpperCase()}] ${f.id} — ${f.title}`);
+    lines.push(`  where:    ${loc}${f.redactedMatch ? '  match: ' + f.redactedMatch : ''}`);
+    lines.push(`  evidence: ${f.evidence}`);
+    lines.push(`  why:      ${f.why}`);
+    lines.push(`  fix:      ${f.fix}`);
+    if (f.reachable !== null) lines.push(`  reachable: ${f.reachable}`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Failure helper
+// ---------------------------------------------------------------------------
+
+function fail(json, message) {
+  process.stderr.write(JSON.stringify({ error: message }) + '\n');
+  process.exit(1);
+}
+
+main();

@@ -1,0 +1,199 @@
+{
+  "$schema": "fantasia/settings-checks-v1",
+  "description": "Declarative catalog for the config module's permissions (C), privacy (D), and context (E) checks. Each entry carries: id, dimension, severity, title, detect (human-readable detection hint / provenance template), why (plain-English), fix (what to change, incl. exact snippet where relevant), and optional caveatContextual (the §4 plain+contextual caveat the audit skill should branch on whether a real exposure was found). The scanner implements the detection logic per id; this file is the single source of truth for the catalog text so checks are data, not hardcoded strings. {file} and {value} are interpolated by the scanner.",
+  "checks": [
+    {
+      "id": "mode-bypass-permissions",
+      "dimension": "permissions",
+      "severity": "critical",
+      "title": "Permission prompts are fully bypassed",
+      "detect": "settings `defaultMode` is \"bypassPermissions\" in {file}",
+      "why": "bypassPermissions skips every approval prompt — even for writes to .git and .claude. Outside an isolated container or VM, anything Claude or a script it runs decides to do happens with no checkpoint.",
+      "fix": "Set \"defaultMode\": \"default\" in settings. To lock the bypass off entirely, add { \"permissions\": { \"disableBypassPermissionsMode\": \"disable\" } }. Only use bypass in an isolated environment.",
+      "caveatContextual": "Only safe inside a throwaway container or VM. On your real machine this removes the last line of defense."
+    },
+    {
+      "id": "mode-auto",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "Auto-approve mode is on",
+      "detect": "settings `defaultMode` is \"auto\" in {file}",
+      "why": "auto mode (a research preview) auto-approves actions without asking. Combined with broad Bash or read access, the blast radius is large.",
+      "fix": "Reconsider auto mode; set \"defaultMode\": \"default\". To lock it out add { \"permissions\": { \"disableAutoMode\": \"disable\" } }."
+    },
+    {
+      "id": "mode-accept-edits-persisted",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "Edits are auto-accepted by default",
+      "detect": "settings `defaultMode` is \"acceptEdits\" persisted as the default in {file}",
+      "why": "acceptEdits auto-accepts file edits — including rm/mv/cp inside the working directory — without a per-edit prompt. Fine for a focused session, risky as a permanent default.",
+      "fix": "Remove \"defaultMode\": \"acceptEdits\" from persisted settings and enable accept-edits per session only when you want it."
+    },
+    {
+      "id": "bash-wide-open",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "Bash is allowed with no restriction",
+      "detect": "permissions.allow contains a bare `Bash` or `Bash(*)` rule in {file}",
+      "why": "A bare Bash allow drops the whole-tool approval prompt, so Claude can run any shell command without asking. That is effectively unrestricted command execution.",
+      "fix": "Remove the bare `Bash` / `Bash(*)` allow. Rely on per-command approval, or add specific allow rules like `Bash(npm test)`, `Bash(git status)`."
+    },
+    {
+      "id": "network-bash-allowed",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "Network commands (curl/wget) are pre-approved",
+      "detect": "permissions.allow contains `Bash(curl ...)` or `Bash(wget ...)` in {file}",
+      "why": "curl and wget are deliberately NOT auto-approved by Claude Code because they are the main way data leaves your machine. Allowing them turns any reachable secret into an exfiltration risk, and any web content into a prompt-injection vector.",
+      "fix": "Move curl/wget to permissions.deny. For fetching docs, use a WebFetch(domain:...) allowlist instead.",
+      "caveatContextual": "This is the channel a reachable secret would actually leave through — it matters most when the scan also found exposed secrets."
+    },
+    {
+      "id": "fragile-arg-rule",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "A bash rule tries to constrain arguments",
+      "detect": "permissions.allow contains an argument-constraining bash rule, e.g. `Bash(curl http://x/ *)` in {file}",
+      "why": "Argument-pattern allow rules give a false sense of security. They are bypassable with flags, https vs http, redirects, shell variables, or command chaining.",
+      "fix": "Don't rely on argument patterns for safety. Use a deny rule plus WebFetch(domain:...), or a PreToolUse hook that inspects the real command."
+    },
+    {
+      "id": "env-runner-allowed",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "An indirect command runner is pre-approved",
+      "detect": "permissions.allow contains a runner like `Bash(npx ...)`, `Bash(docker exec ...)`, `Bash(devbox run ...)`, `Bash(uvx ...)` in {file}",
+      "why": "These commands can run arbitrary inner commands, so allowing them is effectively the same as allowing all of Bash.",
+      "fix": "Replace the runner allow with specific inner-command rules for exactly the tasks you need."
+    },
+    {
+      "id": "webfetch-all-domains",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "WebFetch is allowed for all domains",
+      "detect": "permissions.allow contains a bare `WebFetch` rule in {file}",
+      "why": "A bare WebFetch allow lets Claude fetch any URL, which can pull in prompt-injection content or be used to phone data out via the URL.",
+      "fix": "Restrict to specific domains: `WebFetch(domain:docs.anthropic.com)`, etc."
+    },
+    {
+      "id": "webfetch-preflight-off",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "WebFetch preflight safety check is disabled",
+      "detect": "settings has `skipWebFetchPreflight: true` in {file}",
+      "why": "Turning off the preflight check means you lose Anthropic's malicious-domain blocklist on fetched URLs.",
+      "fix": "Remove \"skipWebFetchPreflight\": true (or set it to false), and pair WebFetch with a domain allowlist."
+    },
+    {
+      "id": "mcp-wide-open",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "MCP tools are broadly auto-allowed",
+      "detect": "permissions.allow contains a broad `mcp__*` rule, or write-capable MCP tools are auto-allowed, in {file}",
+      "why": "A broad mcp__ allow auto-approves every tool on every connected MCP server. Anthropic does not security-audit third-party MCP servers, so this can hand wide capability to code you didn't vet.",
+      "fix": "Scope MCP permissions per server and per tool, e.g. `mcp__github__list_issues`, instead of a blanket mcp__ rule."
+    },
+    {
+      "id": "mcp-write-capable",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "Write-capable MCP connectors are configured",
+      "detect": "`.mcp.json` declares connectors that can send email, move money, or delete data ({value})",
+      "why": "Connectors that can take real-world actions (send email, transfer funds, delete records) deserve a deliberate trust decision — a prompt injection that reaches them can act as you.",
+      "fix": "Confirm you intend each connector. Apply least privilege: scope tokens/scopes down, and only allow the specific tools you use."
+    },
+    {
+      "id": "opaque-hook",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "A hook runs a shell command on tool calls",
+      "detect": "a PreToolUse/PostToolUse (or other) hook runs a shell command, declared in {file}",
+      "why": "Hooks run automatically on tool calls. An opaque hook command can do anything your shell can, every time it fires, without a prompt.",
+      "fix": "Review exactly what the hook command runs. For cautious teams, prefer a ConfigChange hook and keep hook scripts in-repo and reviewed."
+    },
+    {
+      "id": "additional-dirs-broad",
+      "dimension": "permissions",
+      "severity": "medium",
+      "title": "Additional working directories are too broad",
+      "detect": "settings `additionalDirectories` (or `--add-dir`) includes a broad path like ~, /, or a home root in {file}",
+      "why": "additionalDirectories widens what Claude can reach beyond the project. A broad entry like your home folder or filesystem root massively enlarges the blast radius.",
+      "fix": "Narrow additionalDirectories to the specific extra folders you actually need."
+    },
+    {
+      "id": "no-secret-deny-rules",
+      "dimension": "permissions",
+      "severity": "high",
+      "title": "No Read deny rules protecting secrets",
+      "detect": "no permissions.deny Read rule covers .env / secrets / ssh keys across {file}",
+      "why": "Without a Read deny rule, nothing stops Claude from opening files like .env, *.pem, or ~/.ssh directly.",
+      "fix": "Add Read deny rules: { \"permissions\": { \"deny\": [\"Read(./.env)\", \"Read(**/.env)\", \"Read(**/.env.*)\", \"Read(**/*.pem)\", \"Read(**/id_rsa)\", \"Read(~/.ssh/**)\", \"Read(./secrets/**)\"] } }",
+      "caveatContextual": "A deny rule stops me from opening the file directly, but a script you or I run in this project could still read it. That matters most when there's actually a live secret there — otherwise it's just worth knowing for later."
+    },
+    {
+      "id": "sandbox-off",
+      "dimension": "permissions",
+      "severity": "info",
+      "title": "OS-level sandbox is not enabled",
+      "detect": "no sandbox configuration detected in settings ({file})",
+      "why": "A deny rule is a guardrail inside Claude Code; the sandbox is an OS-level boundary that even a script we run can't step outside of. Without it, the airtight protection isn't on.",
+      "fix": "Consider enabling the sandbox via /sandbox for OS-level isolation.",
+      "caveatContextual": "Worth turning on now if the scan found a real exposure (it's the airtight fix); otherwise just good to know for when you start handling sensitive data."
+    },
+    {
+      "id": "consumer-training-on",
+      "dimension": "privacy",
+      "severity": "info",
+      "title": "Consumer plan may use your data for training",
+      "detect": "[judgment] plan appears to be Free/Pro/Max (not detectable from local files)",
+      "why": "On consumer plans, your data — including code — may be used to train models, with up to 5-year retention. This is a posture note, not a vulnerability.",
+      "fix": "Review your data controls at claude.ai/settings/data-privacy-controls. This check is informational; the scanner cannot read your plan from local files."
+    },
+    {
+      "id": "local-transcripts",
+      "dimension": "privacy",
+      "severity": "info",
+      "title": "Conversation transcripts are stored locally",
+      "detect": "plaintext transcripts live under ~/.claude/projects/ (default retention {value} days)",
+      "why": "Claude Code keeps local plaintext transcripts of your sessions (default 30 days). For sensitive work these can linger on disk.",
+      "fix": "Set \"cleanupPeriodDays\" in settings to a shorter window for sensitive work, e.g. { \"cleanupPeriodDays\": 7 }."
+    },
+    {
+      "id": "telemetry-state",
+      "dimension": "privacy",
+      "severity": "info",
+      "title": "Telemetry / reporting state",
+      "detect": "state of DISABLE_TELEMETRY / DISABLE_ERROR_REPORTING / DISABLE_FEEDBACK_COMMAND / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in settings env ({value})",
+      "why": "Telemetry and error reporting send usage data (not your code or file paths). The /feedback command, however, does include code. This is a posture note so you can choose your comfort level.",
+      "fix": "To opt out, set these in settings env: { \"env\": { \"DISABLE_TELEMETRY\": \"1\", \"DISABLE_ERROR_REPORTING\": \"1\", \"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\" } }."
+    },
+    {
+      "id": "no-claude-md",
+      "dimension": "context",
+      "severity": "medium",
+      "title": "No CLAUDE.md found",
+      "detect": "no CLAUDE.md (or AGENTS.md) in the project root",
+      "why": "Without a CLAUDE.md, Claude has no project-specific guidance — conventions, what's off-limits, how to route work — so it guesses more and you repeat yourself.",
+      "fix": "Generate a right-sized CLAUDE.md (the /fantasia:setup interview can do this for you)."
+    },
+    {
+      "id": "claude-md-bloated",
+      "dimension": "context",
+      "severity": "low",
+      "title": "CLAUDE.md is oversized",
+      "detect": "a CLAUDE.md/AGENTS.md exceeds the size guideline ({value})",
+      "why": "Oversized always-loaded context wastes tokens and, past a point, makes the model 'get confused' rather than better-informed.",
+      "fix": "Trim CLAUDE.md to the essentials; move rarely-needed detail into referenced files loaded on demand."
+    },
+    {
+      "id": "claude-md-conflicts",
+      "dimension": "context",
+      "severity": "low",
+      "title": "Conflicting / duplicated context files",
+      "detect": "multiple nested CLAUDE.md files, or both CLAUDE.md and AGENTS.md present ({value})",
+      "why": "Conflicting nested CLAUDE.md files, or a CLAUDE.md that duplicates AGENTS.md, can give the model contradictory instructions.",
+      "fix": "Reconcile the files: keep one source of truth per scope and remove duplication."
+    }
+  ]
+}

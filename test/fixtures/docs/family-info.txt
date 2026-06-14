@@ -1,0 +1,8 @@
+Family record sheet (FAKE data for testing).
+
+Name: Jane Q. Public
+Date of birth: 01/02/1980
+Social Security: 123-45-6789
+Home address: 123 Main St
+
+Notes: keep this confidential. This is a settlement-related personal record.

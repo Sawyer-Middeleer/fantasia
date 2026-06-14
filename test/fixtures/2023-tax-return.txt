@@ -1,0 +1,5 @@
+2023 Tax Return summary (FAKE).
+
+Adjusted gross income reported on this tax return.
+Refund / balance due calculated below.
+This file is named like a tax document so the filename glob should also fire.

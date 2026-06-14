@@ -1,0 +1,59 @@
+{
+  "$schema": "fantasia/sensitive-rulepack-v1",
+  "description": "Non-credential sensitive-data detection. Categories: financial, medical, legal-pii. A category fires on a file when EITHER (a) a filename glob matches, OR (b) at least one content pattern matches, OR (c) at least minKeywordHits distinct keywords appear in content. Findings carry category + filename + a redacted snippet + evidence. patterns are JavaScript RegExp sources. filenameGlobs are simple globs (* and ?) matched against the POSIX basename, case-insensitive.",
+  "categories": [
+    {
+      "id": "sensitive-financial",
+      "category": "financial",
+      "severity": "high",
+      "description": "Financial records: invoices, payroll, tax docs, bank/routing/card numbers.",
+      "minKeywordHits": 2,
+      "keywords": [
+        "invoice", "payroll", "salary", "wages", "routing number", "account number",
+        "iban", "swift", "bank statement", "tax return", "w-2", "w2", "1099",
+        "social security", "credit card", "cardholder", "cvv", "balance due", "wire transfer"
+      ],
+      "patterns": [
+        { "id": "us-ssn", "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b", "note": "US Social Security Number pattern" },
+        { "id": "credit-card", "regex": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\\b", "note": "Major credit card number pattern" },
+        { "id": "us-routing", "regex": "\\bABA[#:\\s]*\\d{9}\\b", "note": "US bank routing/ABA number" },
+        { "id": "iban", "regex": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b", "note": "IBAN bank account" }
+      ],
+      "filenameGlobs": ["*tax*", "*payroll*", "*invoice*", "*salary*", "*w-2*", "*w2*", "*1099*", "*bank-statement*", "*paystub*"]
+    },
+    {
+      "id": "sensitive-medical",
+      "category": "medical",
+      "severity": "high",
+      "description": "Medical / health records: diagnoses, prescriptions, patient identifiers (PHI).",
+      "minKeywordHits": 2,
+      "keywords": [
+        "diagnosis", "diagnosed", "patient", "prescription", "prescribed", "medication",
+        "treatment", "symptom", "blood pressure", "medical record", "mrn", "icd-10",
+        "phi", "hipaa", "date of birth", "dob", "lab results", "physician"
+      ],
+      "patterns": [
+        { "id": "icd10-code", "regex": "\\b[A-TV-Z][0-9][0-9AB](?:\\.[0-9A-TV-Z]{1,4})?\\b(?=.*(?:diagnos|patient|icd))", "note": "ICD-10 diagnosis code near medical context" },
+        { "id": "dob", "regex": "(?i)\\b(?:dob|date of birth)\\b[\\s:]*\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}", "note": "Date of birth field" }
+      ],
+      "filenameGlobs": ["*medical*", "*patient*", "*diagnosis*", "*prescription*", "*health-record*", "*phi*"]
+    },
+    {
+      "id": "sensitive-legal-pii",
+      "category": "legal-pii",
+      "severity": "medium",
+      "description": "Legal / personal-identifying info: confidential agreements, settlements, passports, addresses near names.",
+      "minKeywordHits": 2,
+      "keywords": [
+        "confidential", "settlement", "non-disclosure", "nda", "passport", "driver's license",
+        "drivers license", "attorney-client", "privileged", "legal hold", "litigation",
+        "plaintiff", "defendant", "deposition", "home address", "date of birth"
+      ],
+      "patterns": [
+        { "id": "us-passport", "regex": "(?i)passport\\s*(?:no\\.?|number|#)?[\\s:]*[A-Z0-9]{6,9}\\b", "note": "Passport number field" },
+        { "id": "us-drivers-license", "regex": "(?i)(?:driver'?s?\\s*licen[sc]e|dl)\\s*(?:no\\.?|number|#)?[\\s:]*[A-Z0-9]{6,12}\\b", "note": "Driver's license field" }
+      ],
+      "filenameGlobs": ["*confidential*", "*settlement*", "*nda*", "*passport*", "*privileged*", "*deposition*"]
+    }
+  ]
+}

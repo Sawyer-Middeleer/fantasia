@@ -1,0 +1,16 @@
+{
+  "name": "fantasia",
+  "owner": {
+    "name": "Sawyer Middeleer"
+  },
+  "metadata": {
+    "description": "fantasia — a friendly, private checkup for your Claude Code setup."
+  },
+  "plugins": [
+    {
+      "name": "fantasia",
+      "source": "./",
+      "description": "A friendly checkup for your Claude Code setup — finds exposed secrets, sensitive files, and loose permissions, explains every finding in plain English, and fixes them with your approval."
+    }
+  ]
+}

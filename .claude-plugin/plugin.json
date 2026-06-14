@@ -1,0 +1,11 @@
+{
+  "name": "fantasia",
+  "description": "A friendly checkup for your Claude Code setup. Finds exposed secrets, sensitive files, and loose permissions, explains every finding in plain English, and fixes them one approved step at a time.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Sawyer Middeleer"
+  },
+  "homepage": "https://github.com/Sawyer-Middeleer/fantasia",
+  "repository": "https://github.com/Sawyer-Middeleer/fantasia",
+  "license": "MIT"
+}
