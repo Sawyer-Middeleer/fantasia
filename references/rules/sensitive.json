@@ -1,59 +1,99 @@
 {
   "$schema": "fantasia/sensitive-rulepack-v1",
-  "description": "Non-credential sensitive-data detection. Categories: financial, medical, legal-pii. A category fires on a file when EITHER (a) a filename glob matches, OR (b) at least one content pattern matches, OR (c) at least minKeywordHits distinct keywords appear in content. Findings carry category + filename + a redacted snippet + evidence. patterns are JavaScript RegExp sources. filenameGlobs are simple globs (* and ?) matched against the POSIX basename, case-insensitive.",
+  "description": "Non-credential sensitive-data detection, tuned for PRECISION over recall: only flag files that genuinely ARE sensitive records — not articles, docs, or code that merely mention a topic. Three high-signal routes, any of which fires a category: (a) FILENAME — a glob naming a real document type or extension (e.g. *.dcm, *1099*, eStmt*, *.qfx). The filename route runs on EVERY file including binary and oversized ones, because a filename is metadata, not content — so it never reads the bytes. (b) PATTERN — a content regex matching an actual labelled value or data format (e.g. 'SSN: 123-45-6789', a card number, 'Rx# 12345'). (c) KEYWORDS — at least minKeywordHits DISTINCT multi-word phrases that essentially only appear in real records. Both content routes run only on text files. AVOID broad single words ('tax', 'diagnosis', 'symptom', 'patient', 'rx') and broad globs ('*tax*', '*nda*', '*phi*') — they false-fire on syntax.js, agenda.md, philosophy.md, RxJS, etc. Globs are substring-style over the basename, case-insensitive; keep tokens distinctive. patterns are JavaScript RegExp sources; a leading (?i) is honored as the case-insensitive flag. This pack is meant to be extended with more real-world naming conventions.",
   "categories": [
     {
       "id": "sensitive-financial",
       "category": "financial",
       "severity": "high",
-      "description": "Financial records: invoices, payroll, tax docs, bank/routing/card numbers.",
+      "description": "Real financial records — tax forms, bank/brokerage statements, payroll, financial-export file types, and labelled bank/card numbers. Named the way these are actually downloaded and saved.",
       "minKeywordHits": 2,
       "keywords": [
-        "invoice", "payroll", "salary", "wages", "routing number", "account number",
-        "iban", "swift", "bank statement", "tax return", "w-2", "w2", "1099",
-        "social security", "credit card", "cardholder", "cvv", "balance due", "wire transfer"
+        "social security number",
+        "routing number",
+        "bank account number",
+        "taxpayer identification number",
+        "tax identification number",
+        "cardholder name",
+        "card verification",
+        "account holder",
+        "wire transfer instructions",
+        "direct deposit authorization"
       ],
       "patterns": [
-        { "id": "us-ssn", "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b", "note": "US Social Security Number pattern" },
-        { "id": "credit-card", "regex": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\\b", "note": "Major credit card number pattern" },
-        { "id": "us-routing", "regex": "\\bABA[#:\\s]*\\d{9}\\b", "note": "US bank routing/ABA number" },
+        { "id": "us-ssn", "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b", "note": "US Social Security Number format" },
+        { "id": "ssn-labeled", "regex": "(?i)social\\s*security\\s*(?:number|no\\.?|#)?\\s*[:#]?\\s*\\d{3}-?\\d{2}-?\\d{4}", "note": "Labelled SSN with a value" },
+        { "id": "credit-card", "regex": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\\b", "note": "Major credit card number" },
+        { "id": "routing-labeled", "regex": "(?i)(?:routing|aba)\\s*(?:number|no\\.?|#)?\\s*[:#]?\\s*\\d{9}\\b", "note": "Labelled bank routing / ABA number" },
+        { "id": "account-number-labeled", "regex": "(?i)account\\s*(?:number|no\\.?|#)\\s*[:#]?\\s*\\d{6,17}\\b", "note": "Labelled bank account number with a value" },
         { "id": "iban", "regex": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b", "note": "IBAN bank account" }
       ],
-      "filenameGlobs": ["*tax*", "*payroll*", "*invoice*", "*salary*", "*w-2*", "*w2*", "*1099*", "*bank-statement*", "*paystub*"]
+      "filenameGlobs": [
+        "*tax-return*", "*tax_return*", "*1040*", "*1099*", "*1098*", "*5498*",
+        "*w-2*", "*w2-*", "*w-9*", "*schedule-c*", "*schedule-k-1*", "*form-8949*",
+        "estmt*", "*estatement*", "*e-statement*", "*bank-statement*", "*account-statement*",
+        "*monthly-statement*", "*brokerage-statement*", "*earnings-statement*",
+        "*paystub*", "*pay-stub*", "*payslip*", "*payroll*",
+        "*.ofx", "*.qfx", "*.qbo", "*.qbb", "*.qbw", "*.qif", "*.tax", "*.tax2*"
+      ]
     },
     {
       "id": "sensitive-medical",
       "category": "medical",
       "severity": "high",
-      "description": "Medical / health records: diagnoses, prescriptions, patient identifiers (PHI).",
+      "description": "Real medical / health records (PHI) — medical imaging file types (DICOM/NIfTI), record/lab/visit documents, and labelled record numbers, ICD-10 codes, or Rx numbers. Never the bare words 'patient', 'diagnosis', or 'rx'.",
       "minKeywordHits": 2,
       "keywords": [
-        "diagnosis", "diagnosed", "patient", "prescription", "prescribed", "medication",
-        "treatment", "symptom", "blood pressure", "medical record", "mrn", "icd-10",
-        "phi", "hipaa", "date of birth", "dob", "lab results", "physician"
+        "medical record number",
+        "prescribing physician",
+        "diagnosis code",
+        "health insurance claim",
+        "explanation of benefits",
+        "discharge summary",
+        "rx number",
+        "subscriber id",
+        "patient identifier"
       ],
       "patterns": [
-        { "id": "icd10-code", "regex": "\\b[A-TV-Z][0-9][0-9AB](?:\\.[0-9A-TV-Z]{1,4})?\\b(?=.*(?:diagnos|patient|icd))", "note": "ICD-10 diagnosis code near medical context" },
-        { "id": "dob", "regex": "(?i)\\b(?:dob|date of birth)\\b[\\s:]*\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}", "note": "Date of birth field" }
+        { "id": "mrn-labeled", "regex": "(?i)(?:mrn|medical\\s*record\\s*(?:number|no\\.?|#)?)\\s*[:#]\\s*[A-Z0-9-]{5,}", "note": "Labelled medical record number with a value" },
+        { "id": "icd10-coded", "regex": "(?i)icd-?10\\s*[:#]?\\s*[A-TV-Z][0-9][0-9AB](?:\\.[0-9A-TV-Z]{1,4})?", "note": "Explicitly labelled ICD-10 diagnosis code" },
+        { "id": "rx-number", "regex": "(?i)\\brx\\s*(?:#|no\\.?|number)\\s*[:#]?\\s*\\d{3,}", "note": "Prescription (Rx) number with a value — distinct from RX/TX comms or RxJS" }
       ],
-      "filenameGlobs": ["*medical*", "*patient*", "*diagnosis*", "*prescription*", "*health-record*", "*phi*"]
+      "filenameGlobs": [
+        "*medical-record*", "*health-record*", "*lab-result*", "*lab-report*",
+        "*patient-record*", "*prescription*", "*discharge-summary*",
+        "*after-visit-summary*", "*visit-summary*", "*explanation-of-benefits*",
+        "*pathology-report*", "*radiology-report*", "*immunization-record*",
+        "*.dcm", "*.dicom", "*.nii", "*.nii.gz", "*.nrrd", "*.hl7"
+      ]
     },
     {
       "id": "sensitive-legal-pii",
       "category": "legal-pii",
       "severity": "medium",
-      "description": "Legal / personal-identifying info: confidential agreements, settlements, passports, addresses near names.",
+      "description": "Personal-identifying info and privileged legal material — labelled IDs, contact-card files, and distinctive multi-word phrases. Never bare 'confidential' or 'litigation'.",
       "minKeywordHits": 2,
       "keywords": [
-        "confidential", "settlement", "non-disclosure", "nda", "passport", "driver's license",
-        "drivers license", "attorney-client", "privileged", "legal hold", "litigation",
-        "plaintiff", "defendant", "deposition", "home address", "date of birth"
+        "date of birth",
+        "home address",
+        "driver's license number",
+        "drivers license number",
+        "passport number",
+        "social security number",
+        "attorney-client privilege",
+        "privileged and confidential",
+        "settlement agreement",
+        "non-disclosure agreement"
       ],
       "patterns": [
-        { "id": "us-passport", "regex": "(?i)passport\\s*(?:no\\.?|number|#)?[\\s:]*[A-Z0-9]{6,9}\\b", "note": "Passport number field" },
-        { "id": "us-drivers-license", "regex": "(?i)(?:driver'?s?\\s*licen[sc]e|dl)\\s*(?:no\\.?|number|#)?[\\s:]*[A-Z0-9]{6,12}\\b", "note": "Driver's license field" }
+        { "id": "dob-labeled", "regex": "(?i)(?:dob|date\\s*of\\s*birth)\\s*[:#]\\s*\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}", "note": "Labelled date of birth with a value" },
+        { "id": "passport-labeled", "regex": "(?i)passport\\s*(?:number|no\\.?|#)\\s*[:#]?\\s*[A-Z0-9]{6,9}\\b", "note": "Labelled passport number" },
+        { "id": "dl-labeled", "regex": "(?i)(?:driver'?s?\\s*licen[sc]e|dl)\\s*(?:number|no\\.?|#)\\s*[:#]?\\s*[A-Z0-9]{6,12}\\b", "note": "Labelled driver's license number" }
       ],
-      "filenameGlobs": ["*confidential*", "*settlement*", "*nda*", "*passport*", "*privileged*", "*deposition*"]
+      "filenameGlobs": [
+        "*passport*", "*non-disclosure*", "*settlement-agreement*",
+        "*deposition*", "*power-of-attorney*", "*.vcf"
+      ]
     }
   ]
 }

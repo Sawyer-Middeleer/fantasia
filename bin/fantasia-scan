@@ -589,21 +589,29 @@ function main() {
   // SECRETS + SENSITIVE MODULES (single tree walk)
   // -------------------------------------------------------------------------
   walk(root, ignoreMatcher, (abs, rel) => {
-    let buf;
+    access.filesScanned++;
+    let buf = null;
     try {
       const st = fs.statSync(abs);
-      if (st.size > MAX_FILE_BYTES) { access.skipped.tooLarge++; return; }
-      buf = fs.readFileSync(abs);
+      if (st.size > MAX_FILE_BYTES) { access.skipped.tooLarge++; }
+      else { buf = fs.readFileSync(abs); }
     } catch {
       return;
     }
-    if (looksBinary(buf)) { access.skipped.binary++; return; }
+    if (buf !== null && looksBinary(buf)) { access.skipped.binary++; buf = null; }
 
-    const text = buf.toString('utf8');
-    access.filesScanned++;
-    access.bytesScanned += buf.length;
+    let text = null;
+    if (buf !== null) {
+      text = buf.toString('utf8');
+      access.bytesScanned += buf.length;
+      scanSecrets(rel, text, rules.secrets, secretsFindings);
+    }
 
-    scanSecrets(rel, text, rules.secrets, secretsFindings);
+    // Sensitive detection: the FILENAME route runs on every file — a name like
+    // `scan.dcm` or `eStmt_2024-01-31.pdf` is metadata, not content, so flagging
+    // it never reads the bytes (binary/oversized files are skipped above for the
+    // content routes, but we still check their names). The pattern/keyword routes
+    // run only when we have text.
     scanSensitive(abs, rel, text, rules.sensitive, sensitiveFindings);
   }, access);
 
@@ -1260,9 +1268,14 @@ function scanSensitive(abs, rel, text, sensitivePack, out) {
       }
     }
 
+    // Content routes (patterns + keywords) only run when we actually have text.
+    // For binary / oversized files, `text` is null and only the filename route
+    // above can fire — so we never read those bytes into a finding.
+    const hasText = typeof text === 'string' && text.length > 0;
+
     // pattern matches
     let patternHit = null; // { id, offset, raw }
-    if (Array.isArray(cat.patterns)) {
+    if (hasText && Array.isArray(cat.patterns)) {
       for (const pat of cat.patterns) {
         pat._re.lastIndex = 0;
         const m = pat._re.exec(text);
@@ -1271,10 +1284,12 @@ function scanSensitive(abs, rel, text, sensitivePack, out) {
     }
 
     // keyword hits (distinct)
-    const lower = text.toLowerCase();
+    const lower = hasText ? text.toLowerCase() : '';
     const hitKeywords = [];
-    for (const k of cat.keywords || []) {
-      if (lower.includes(k)) hitKeywords.push(k);
+    if (hasText) {
+      for (const k of cat.keywords || []) {
+        if (lower.includes(k)) hitKeywords.push(k);
+      }
     }
     const minHits = cat.minKeywordHits || 2;
     const keywordTriggered = hitKeywords.length >= minHits;

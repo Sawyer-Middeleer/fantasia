@@ -152,6 +152,51 @@ check('summary.newCount is null by default', report.summary.newCount === null);
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------------------
+// Sensitive precision: real document TYPES are caught by FILENAME even when the
+// file is binary/oversized (DICOM, bank-statement PDFs, financial exports).
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fantasia-doctypes-'));
+  // Null bytes -> looksBinary -> skipped from content scanning, but the
+  // filename route still runs (a name is metadata, not content).
+  fs.writeFileSync(path.join(tmp, 'scan.dcm'), Buffer.from([0x44, 0x49, 0x43, 0x4d, 0x00, 0x01, 0x02]));
+  fs.writeFileSync(path.join(tmp, 'eStmt_2024-01-31.pdf'), Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0x99]));
+  fs.writeFileSync(path.join(tmp, 'export.qfx'), Buffer.from([0x4f, 0x46, 0x58, 0x00, 0x01]));
+  fs.writeFileSync(path.join(tmp, 'readme.md'), 'nothing sensitive here');
+  const r = scan(tmp).report;
+  const med = r.findings.find((f) => f.id === 'sensitive-medical');
+  const fin = r.findings.find((f) => f.id === 'sensitive-financial');
+  check('doctype: .dcm flagged by filename despite being binary', !!med && /filename matches/.test(med.evidence));
+  check('doctype: bank eStmt pdf flagged by filename (binary)', !!fin);
+  check('doctype: binary sensitive file carries no content snippet', !!med && med.redactedMatch == null);
+  check('doctype: still read 0 file contents into context', r.access.contentsReadIntoContext === 0);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Sensitive precision: broad keywords / dev files must NOT false-fire.
+// "tax" / "diagnosis" / "symptom" / "patient" / "Rx:" / RxJS / agenda / philosophy.
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fantasia-fp-'));
+  fs.writeFileSync(path.join(tmp, 'syntax-and-taxes.md'),
+    'A guide to syntax. Your tax situation varies; common symptoms of tech debt. Diagnosis: messy code.');
+  fs.writeFileSync(path.join(tmp, 'agenda.md'),
+    'Team agenda: patient onboarding flow, medical device integration, salary review, confidential roadmap.');
+  fs.writeFileSync(path.join(tmp, 'philosophy.md'),
+    'Our design philosophy and the treatment of edge cases.');
+  fs.writeFileSync(path.join(tmp, 'network-rx-tx.md'),
+    'Serial link stats. Rx: 1500 packets, Tx: 1490 packets. Diagnosis of latency follows.');
+  fs.writeFileSync(path.join(tmp, 'rxjs-notes.md'),
+    'RxJS observable patterns; our prescription for clean reactive code.');
+  const r = scan(tmp).report;
+  const sensitive = r.findings.filter((f) => typeof f.id === 'string' && f.id.startsWith('sensitive-'));
+  check('precision: zero sensitive false-positives on broad-word / dev files', sensitive.length === 0);
+  if (sensitive.length) console.log('       unexpected: ' + sensitive.map((f) => f.id + ' @ ' + f.file).join(', '));
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log('');
 if (failures) { console.log(`${failures} check(s) FAILED`); process.exit(1); }
 console.log('all smoke checks passed');

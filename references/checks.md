@@ -165,7 +165,7 @@ finds the file is reachable.
 |---|---|
 | **sev** | high |
 | **dim** | exposure |
-| **detect** | `[script]` keyword/pattern pack: `invoice`, routing numbers, SSN patterns, card number patterns, `*tax*.{xlsx,pdf}`, `salary`, `payroll` |
+| **detect** | `[script]` high-precision pack: document-name/extension globs (`*1099*`, `*tax-return*`, `eStmt*`, `*.qfx`, `*.ofx`, `*.qbo`, `*.tax2*`), label+value patterns (SSN, card, routing, account number), and distinctive multi-word phrases (`social security number`, `routing number`). The filename route runs even on binary/oversized files, so a statement PDF is caught by its name without reading the bytes. Deliberately **not** broad words like `tax` or `salary`. |
 
 **Why it matters.** Financial records often contain personally identifiable
 information (PII). Giving an agent broad file access without fencing off financial
@@ -184,7 +184,7 @@ project root entirely if they are not needed for the task at hand.
 |---|---|
 | **sev** | high |
 | **dim** | exposure |
-| **detect** | `[script]` keyword pack: `diagnosis`, `patient`, `prescription`, `DOB` appearing near names or identifiers |
+| **detect** | `[script]` high-precision pack: medical-imaging file types (`*.dcm`, `*.dicom`, `*.nii`, `*.hl7`), record-name globs (`*medical-record*`, `*lab-result*`, `*after-visit-summary*`, `*prescription*`), and labelled patterns (medical record number, ICD-10 code, `Rx# 12345`). Deliberately **not** bare `patient`, `diagnosis`, or `rx` (which would hit RxJS, "impatient", etc.). |
 
 **Why it matters.** Medical data is highly regulated (HIPAA in the US). An agent
 reading patient records without explicit safeguards is a compliance and privacy
@@ -202,7 +202,7 @@ required.
 |---|---|
 | **sev** | medium |
 | **dim** | exposure |
-| **detect** | `[script]` keyword pack: `confidential`, `settlement`, `passport`, addresses appearing near names |
+| **detect** | `[script]` high-precision pack: labelled IDs (passport, driver's license, `DOB: 01/02/1980`), contact-card files (`*.vcf`), document-name globs (`*non-disclosure*`, `*settlement-agreement*`, `*power-of-attorney*`), and distinctive phrases (`attorney-client privilege`, `non-disclosure agreement`). Deliberately **not** bare `confidential` or `litigation`. |
 
 **Why it matters.** Legal documents and PII (personally identifiable information)
 carry confidentiality obligations. Medium severity because this category has a
@@ -758,5 +758,5 @@ Every finding emitted by `fantasia-scan` follows this structure:
 `evidence` is always one of:
 - `"filename matches X"` (for file-pattern checks)
 - `"regex rule Y + entropy Z"` (for secret checks)
-- `"keyword 'diagnosis' near 'patient'"` (for sensitive-data checks)
+- `"filename matches *.dcm"` or `"pattern dob-labeled matched"` (for sensitive-data checks)
 - `"settings.json permissions.allow contains Bash(*)"` (for config checks)
