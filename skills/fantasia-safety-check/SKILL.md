@@ -80,31 +80,27 @@ secret values, will not open file contents into chat, will not change anything
 yet, Claude only sees redacted findings, every finding shows how it was
 detected, never looks above the project folder):
 
-> **fantasia is about to run a local checkup. Nothing runs until you say go.**
+> **I'd like to run a quick safety check on this project — nothing happens until
+> you say go.**
 >
-> **What runs:** `fantasia-scan`, a small script on your machine. It runs fully
-> offline — no network calls, sends nothing anywhere.
+> **How it works:** a small checker runs right here on your computer. It stays on
+> your machine and doesn't send anything anywhere.
 >
-> **What it reads (locally):** your Claude config (`.claude/settings` files,
-> `.mcp.json`, hooks, `CLAUDE.md` / `AGENTS.md`, ignore files, and your
-> user-level `~/.claude` settings), and your project files, to look for exposed
-> secrets and sensitive data. It skips `node_modules`, `.git`, binaries, and
-> anything already ignored.
+> **What it looks at:** your Claude setup and the files in this project, to find
+> three kinds of thing — settings that give Claude more freedom than you might
+> want, any passwords or keys sitting in plain files, and any documents with
+> personal, financial, or medical information. It also checks whether Claude could
+> actually reach any of that.
 >
-> **What it looks for:** loose security settings (e.g. broad command access, the
-> ability to read `.env`); passwords, API keys, and private keys sitting in
-> readable files; files with financial / medical / personal information; and
-> whether any of that is actually *reachable* by Claude given your settings.
+> **What it won't do:** it won't show me what's inside your files, and it won't
+> reveal any real password or key — those get masked, so I'd see something like
+> `AKIA••••` instead of the real value. It won't change anything; any fixes come
+> later, one at a time, and only if you say yes. And it never looks anywhere
+> outside this project and your Claude setup.
 >
-> **What it will NOT do:** it will not open your file contents into this chat;
-> it will not read the *value* of any password or key (those are redacted —
-> you'll see `AKIA••••`, never the real thing); it will not change anything
-> (fixes come later, one at a time, only with your OK); it will not look outside
-> this project folder and your Claude config.
->
-> **The guarantee:** the script reads the bytes. I only ever see *redacted*
-> findings, so I never see your secrets. And every finding shows *how* it was
-> detected, so you can judge it yourself.
+> **My promise:** the checker reads your files so I don't have to — I only ever
+> see the masked results, never your actual secrets. And for everything it finds,
+> I'll show you how it knew, so you can decide for yourself.
 
 Then get consent through the **AskUserQuestion** tool — do **not** pose this as a
 plain-text question and wait. Call it with:
