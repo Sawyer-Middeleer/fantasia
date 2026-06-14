@@ -28,7 +28,7 @@ that keeps the brooms in their lane.
 - **💬 Ask** (`/fantasia-ask`) — the Claude Code docs in plain English, starting
   from the questions real people actually ask, personalized to your setup.
 
-## The privacy promise
+## How your privacy works
 
 fantasia's scan is a **local script** that runs fully offline. It reads the bytes
 so Claude doesn't have to — and Claude only ever sees **redacted** findings

@@ -35,8 +35,8 @@ exactly the same reason.
 **Hard rule for the `audit` skill:** never use `Read`, `Grep`, `cat`, `sed`, or
 any other tool to open a file that the scanner flagged. Operate only on the
 scanner's output. If a user asks "what does that file contain?", the correct
-answer is: "I haven't looked at it and I'm not going to — that's the guarantee.
-You can open it yourself to confirm."
+answer is: "I haven't looked at it and I'm not going to — that's how it stays
+private. You can open it yourself to confirm."
 
 ---
 
@@ -53,7 +53,7 @@ text). It must cover:
 - What it looks for (settings, secrets, sensitive data, reachability)
 - What it will NOT do (open file contents into the chat; read secret values;
   change anything; look outside the project)
-- The guarantee (the script reads bytes; Claude only sees redacted findings)
+- How it stays private (the script reads bytes; Claude only sees redacted findings)
 
 Then wait. Do not proceed until the user says yes (or an equivalent).
 

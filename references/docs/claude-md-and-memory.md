@@ -112,10 +112,10 @@ on Windows — the import approach works everywhere.
 ## CLAUDE.md is guidance, not enforcement
 
 Instructions in CLAUDE.md shape what Claude tries to do, but they are not
-enforced. Claude reads them and tries to follow them, but there's no
-guarantee of strict compliance — especially for vague instructions. More
-specific instructions ("use 2-space indentation" rather than "format code
-properly") work better.
+enforced. Claude reads them and tries to follow them, but it won't always
+comply strictly — especially with vague instructions. More specific
+instructions ("use 2-space indentation" rather than "format code properly")
+work better.
 
 To actually block an action regardless of what Claude decides, use the
 permission system (deny rules) or a PreToolUse hook. CLAUDE.md alone

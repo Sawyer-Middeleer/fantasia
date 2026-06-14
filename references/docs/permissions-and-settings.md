@@ -149,8 +149,8 @@ Admins can prevent bypass mode with:
 ```
 
 **auto mode** (research preview): a separate classifier reviews each action
-before it runs. It reduces prompts but "does not guarantee safety." The docs
-say: "use it for tasks where you trust the general direction, not as a
+before it runs. It reduces prompts but doesn't make actions automatically safe.
+The docs say: "use it for tasks where you trust the general direction, not as a
 replacement for review on sensitive operations."
 
 ---

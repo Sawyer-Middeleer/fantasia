@@ -387,7 +387,7 @@ WHAT IT WILL NOT DO
     your approval.
   • It will NOT look outside this project folder and your Claude config.
 
-THE GUARANTEE
+IN PLAIN TERMS
   • The script reads the bytes. I (Claude) only ever see REDACTED findings —
     so I never see your secrets.
   • Every finding will show HOW it was detected, so you can judge it yourself.

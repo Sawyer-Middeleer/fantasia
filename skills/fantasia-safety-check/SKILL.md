@@ -75,7 +75,7 @@ The detail lives in the shared reference files — consult them as you go:
 ## Step 1 — Disclose and get consent
 
 Open with this (you may adapt the wording to fit the conversation, but keep
-every guarantee — offline/local script, reads config + project files, redacts
+every point — offline/local script, reads config + project files, redacts
 secret values, will not open file contents into chat, will not change anything
 yet, Claude only sees redacted findings, every finding shows how it was
 detected, never looks above the project folder):
@@ -98,9 +98,9 @@ detected, never looks above the project folder):
 > later, one at a time, and only if you say yes. And it never looks anywhere
 > outside this project and your Claude setup.
 >
-> **My promise:** the checker reads your files so I don't have to — I only ever
-> see the masked results, never your actual secrets. And for everything it finds,
-> I'll show you how it knew, so you can decide for yourself.
+> **In plain terms:** the checker reads your files so I don't have to — I only
+> ever see the masked results, not your actual secrets. And for everything it
+> finds, I'll show you how it knew, so you can decide for yourself.
 
 Then get consent through the **AskUserQuestion** tool — do **not** pose this as a
 plain-text question and wait. Call it with:
@@ -355,7 +355,7 @@ the magic" picture.
 > binaries, ignored files}; never looked above the project folder.
 
 Always state the "read 0 file contents into this conversation" line — it's the
-proof of the privacy promise.
+concrete proof that nothing was read into this chat.
 
 ### 3c. Findings
 
