@@ -1,5 +1,10 @@
 # fantasia 🪄
 
+![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-da7756)
+![plugin validate](https://img.shields.io/badge/plugin%20validate-passing-3fb950)
+![tests](https://img.shields.io/badge/scanner%20tests-41%2F41-3fb950)
+![license](https://img.shields.io/badge/license-MIT-blue)
+
 > One day the sorcerer's apprentice got bored of doing his chores.
 
 **A friendly checkup for your Claude Code setup.** fantasia finds exposed
@@ -30,31 +35,48 @@ so Claude doesn't have to — and Claude only ever sees **redacted** findings
 (`AKIA••••`, never your real keys). Every finding shows *how it was detected*.
 Nothing is sent anywhere, and nothing changes without your say‑so.
 
-## Install
+## Install (from the marketplace)
 
 ```
 /plugin marketplace add Sawyer-Middeleer/fantasia
 /plugin install fantasia@fantasia
 ```
 
-Then run:
+## Use it
+
+Installing or loading the plugin is **silent** — nothing runs on its own. You
+then invoke one of the three skills:
 
 ```
-/fantasia:audit
+/fantasia:audit              # checkup of your current folder
+/fantasia:ask what's MCP?    # plain-English answers
+/fantasia:setup              # safe first-time setup
 ```
 
-## Develop
+`/help` lists the skills under the `fantasia:` namespace once it's loaded.
+
+## Try it from a clone (no install)
 
 ```bash
-claude --plugin-dir ./fantasia      # load locally
-/reload-plugins                     # pick up changes
-claude plugin validate              # validate before release
+# from INSIDE the repo, the plugin dir is "."  (not "./fantasia")
+claude --plugin-dir .
 ```
+
+Then run `/fantasia:audit ./test/fixtures` — a deliberately-broken sample
+project — to see the scan, the score, and the redaction in action. Edit plugin
+files and run `/reload-plugins` to pick up changes; `claude plugin validate .`
+checks the structure before release.
+
+> **"Nothing happened"?** Loading is silent — type `/fantasia:audit` to start.
+> And from inside the repo the path is `.`, not `./fantasia` (which would resolve
+> to a folder that doesn't exist).
 
 ## Status
 
-Early. The audit core (the deterministic scanner + the audit/fix loop) is the
-first milestone. See [plan.md](plan.md) for the full design.
+All three skills are built and the plugin validates. The deterministic scanner
+(secrets · sensitive data · loose settings · reachability correlation) ships with
+a 41-assertion test suite. See [plan.md](plan.md) for the full design and
+[QUICKSTART.md](QUICKSTART.md) for a 60-second start.
 
 ## License
 
