@@ -1,0 +1,6 @@
+# Normalize line endings; force LF so the scanner shebang stays valid cross-platform
+* text=auto eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+bin/fantasia-scan text eol=lf
