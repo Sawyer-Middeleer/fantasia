@@ -33,13 +33,28 @@ const REDACT_MAX_BULLETS = 12;
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { projectPath: null, json: false, rulesDir: null, userConfig: true };
+  const args = {
+    projectPath: null,
+    json: false,
+    rulesDir: null,
+    userConfig: true,
+    ignoreFile: null,       // null => default to <root>/.fantasiaignore
+    ignoreFileSet: false,    // true once --ignore-file was explicitly given
+    baseline: null,          // path to a baseline file to compare against
+    writeBaseline: null,     // path to write a fresh baseline file to
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') args.json = true;
     else if (a === '--no-user-config') args.userConfig = false;
     else if (a === '--rules') { args.rulesDir = argv[++i]; }
     else if (a.startsWith('--rules=')) { args.rulesDir = a.slice('--rules='.length); }
+    else if (a === '--ignore-file') { args.ignoreFile = argv[++i]; args.ignoreFileSet = true; }
+    else if (a.startsWith('--ignore-file=')) { args.ignoreFile = a.slice('--ignore-file='.length); args.ignoreFileSet = true; }
+    else if (a === '--baseline') { args.baseline = argv[++i]; }
+    else if (a.startsWith('--baseline=')) { args.baseline = a.slice('--baseline='.length); }
+    else if (a === '--write-baseline') { args.writeBaseline = argv[++i]; }
+    else if (a.startsWith('--write-baseline=')) { args.writeBaseline = a.slice('--write-baseline='.length); }
     else if (a.startsWith('--')) { /* ignore unknown flags */ }
     else if (args.projectPath === null) { args.projectPath = a; }
   }
@@ -373,6 +388,89 @@ function findLine(text, needle) {
 }
 
 // ---------------------------------------------------------------------------
+// .fantasiaignore — suppress FINDINGS by fingerprint (NOT a file-exclusion list)
+//
+// Modeled on gitleaks' .gitleaksignore. One entry per line; `#` begins a
+// comment; blank lines are ignored. Entry formats:
+//   file:id:line   — an exact fingerprint
+//   file:id:*      — a line-wildcard: suppress every line of that id in that file
+// The `*` wildcard is supported ONLY in the line slot.
+// ---------------------------------------------------------------------------
+
+function loadFantasiaIgnore(absPath) {
+  // Returns { exact:Set<"file:id:line">, wildcard:Set<"file:id"> }.
+  const exact = new Set();
+  const wildcard = new Set();
+  let txt;
+  try {
+    txt = fs.readFileSync(absPath, 'utf8');
+  } catch {
+    return { exact, wildcard, present: false };
+  }
+  for (let raw of txt.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    // Split into exactly 3 fields: file : id : line. The `file` portion is the
+    // remainder before the LAST two colons so paths may contain colons.
+    const lastColon = line.lastIndexOf(':');
+    if (lastColon <= 0) continue;
+    const lineSlot = line.slice(lastColon + 1);
+    const rest = line.slice(0, lastColon);
+    const secondColon = rest.lastIndexOf(':');
+    if (secondColon <= 0) continue;
+    const idSlot = rest.slice(secondColon + 1);
+    const fileSlot = rest.slice(0, secondColon);
+    if (!idSlot) continue;
+    const key = `${fileSlot}:${idSlot}`;
+    if (lineSlot === '*') wildcard.add(key);
+    else exact.add(`${key}:${lineSlot}`);
+  }
+  return { exact, wildcard, present: true };
+}
+
+// Does a finding's fingerprint match an ignore entry?
+function isIgnoredFingerprint(fingerprint, ignore) {
+  if (!ignore) return false;
+  if (ignore.exact.has(fingerprint)) return true;
+  // Wildcard: strip the trailing :line and check file:id membership.
+  const lastColon = fingerprint.lastIndexOf(':');
+  if (lastColon > 0) {
+    const fileId = fingerprint.slice(0, lastColon);
+    if (ignore.wildcard.has(fileId)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Baseline — "accept current state," so re-runs only flag what's NEW.
+// File format (also produced by --write-baseline):
+//   { "fantasiaVersion": "...", "createdAt": null, "fingerprints": [ ... ] }
+// ---------------------------------------------------------------------------
+
+function loadBaseline(absPath) {
+  // Returns a Set of fingerprint strings, or null on failure.
+  try {
+    const txt = fs.readFileSync(absPath, 'utf8');
+    const data = JSON.parse(txt);
+    const fps = (data && Array.isArray(data.fingerprints)) ? data.fingerprints : [];
+    return new Set(fps.filter((x) => typeof x === 'string'));
+  } catch {
+    return null;
+  }
+}
+
+function writeBaselineFile(absPath, findings) {
+  const fingerprints = findings.map((f) => f.fingerprint).filter((x) => typeof x === 'string');
+  const payload = {
+    fantasiaVersion: FANTASIA_VERSION,
+    createdAt: null, // intentionally null — the scanner never calls Date.
+    fingerprints,
+  };
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  fs.writeFileSync(absPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+}
+
+// ---------------------------------------------------------------------------
 // Finding builder
 // ---------------------------------------------------------------------------
 
@@ -393,6 +491,8 @@ function makeFinding(f) {
     reachable: f.reachable === undefined ? null : f.reachable,
     autoFixable: !!f.autoFixable,
     fingerprint: `${file == null ? '' : file}:${f.id}:${line == null ? '' : line}`,
+    ignored: false, // set during the suppression pass if matched by .fantasiaignore
+    isNew: null,    // bool when --baseline given (true => not in baseline), else null
   };
   // Internal-only fields, kept on the object for the final redaction safety pass.
   // They are NON-ENUMERABLE so JSON.stringify never serializes them, and the
@@ -517,9 +617,53 @@ function main() {
   runCorrelation(secretsFindings, sensitiveFindings, permPicture, rules.settingsChecks, findings);
 
   // -------------------------------------------------------------------------
-  // SCORING
+  // .fantasiaignore SUPPRESSION + BASELINE ANNOTATION
   // -------------------------------------------------------------------------
-  const summary = computeScore(findings);
+  // .fantasiaignore: default to <root>/.fantasiaignore; honor --ignore-file.
+  const ignorePath = args.ignoreFile
+    ? path.resolve(args.ignoreFile)
+    : path.join(root, '.fantasiaignore');
+  const fantasiaIgnore = loadFantasiaIgnore(ignorePath);
+
+  // baseline: when --baseline is given, mark each finding new/old; else null.
+  const baselineSet = args.baseline ? loadBaseline(path.resolve(args.baseline)) : null;
+  const baselineActive = baselineSet != null; // a parseable baseline was supplied
+
+  let ignoredCount = 0;
+  let newCount = baselineActive ? 0 : null;
+  for (const f of findings) {
+    if (isIgnoredFingerprint(f.fingerprint, fantasiaIgnore)) {
+      f.ignored = true;
+      ignoredCount++;
+    }
+    if (baselineActive) {
+      f.isNew = !baselineSet.has(f.fingerprint);
+      if (f.isNew && !f.ignored) newCount++;
+    } else {
+      f.isNew = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // --write-baseline — record the CURRENT fingerprints (createdAt stays null).
+  // Includes all findings (ignored ones too) so the accepted state is complete.
+  // -------------------------------------------------------------------------
+  if (args.writeBaseline) {
+    try {
+      writeBaselineFile(path.resolve(args.writeBaseline), findings);
+    } catch (e) {
+      fail(args.json, `failed to write baseline to ${toPosix(path.resolve(args.writeBaseline))}: ${e && e.message ? e.message : e}`);
+      return;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // SCORING — ignored findings are EXCLUDED from counts/score/grades so that
+  // legitimately dismissing a false positive improves the score.
+  // -------------------------------------------------------------------------
+  const summary = computeScore(findings.filter((f) => !f.ignored));
+  summary.ignoredCount = ignoredCount;
+  summary.newCount = newCount;
 
   // -------------------------------------------------------------------------
   // ASSEMBLE OUTPUT

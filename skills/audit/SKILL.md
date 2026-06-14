@@ -17,7 +17,14 @@ argument-hint: "[path to project, defaults to current folder]"
 
 A friendly, private checkup for a Claude Code setup. It scores the setup, shows
 what is exposed and what Claude can actually reach, explains *how it knows* for
-every finding, and fixes issues one approved step at a time.
+every finding, and fixes issues one approved step at a time. It can save a
+plain-English `FANTASIA-REPORT.md`, dismiss false positives, and accept a baseline
+so re-runs only surface what's new.
+
+**The flow, end to end:** disclose & consent (Step 1) → run the scanner (Step 2) →
+add the judgment findings the scanner can't (Step 2.5) → render the report
+(Step 3) → fix loop (Step 4) → dismiss / baseline for clean re-runs (Step 5) →
+write `FANTASIA-REPORT.md` (Step 6).
 
 The detail lives in the shared reference files — consult them as you go:
 
@@ -39,8 +46,11 @@ The detail lives in the shared reference files — consult them as you go:
    look at the secret*. Opening a flagged file pulls the secret into this
    conversation and defeats the entire tool. If you ever feel the urge to "just
    check the file," don't — the JSON already told you everything you may know.
-4. **Never echo a secret value.** Only ever show the `redactedMatch` field
-   (e.g. `AKIA••••`). Never reconstruct, guess, or quote a real value.
+4. **Never echo a secret value** — in chat *or* in any file you write
+   (`FANTASIA-REPORT.md`, `.fantasiaignore`). Only ever show the `redactedMatch`
+   field (e.g. `AKIA••••`). The `.fantasiaignore` fingerprint (`path:rule:line`)
+   is safe; a secret value is never. Never reconstruct, guess, or quote a real
+   value anywhere.
 5. **Change nothing without explicit, per-item approval.** No edits during the
    report. Fixes happen one at a time in the fix loop, each gated on a clear yes.
 6. **Show your work.** Every finding you surface includes its `evidence` — how
@@ -107,6 +117,29 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json
 
 If the user passed a path argument, use that as the scan root instead of `$PWD`.
 
+**Always honor dismissals and baselines.** Before running, check whether the user
+has dismissed any findings or accepted a baseline (these are produced by the
+flows in Step 5):
+
+- The scanner reads `$PWD/.fantasiaignore` automatically. You don't have to pass
+  it — but you may pass it explicitly for clarity:
+  `--ignore-file "$PWD/.fantasiaignore"`.
+- If `$PWD/.fantasia/baseline.json` **exists**, pass
+  `--baseline "$PWD/.fantasia/baseline.json"` so the scanner marks which findings
+  are new since the baseline was accepted.
+
+So the full invocation, when a baseline is present, is:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
+  --baseline "$PWD/.fantasia/baseline.json"
+```
+
+Use a quick `test -f "$PWD/.fantasia/baseline.json"` to decide whether to add the
+`--baseline` flag (or just `ls` the path). Don't pass `--baseline` if the file
+isn't there — the scanner treats a missing baseline as "everything is new," which
+is wrong for a first run.
+
 **Dev fallback:** if `${CLAUDE_PLUGIN_ROOT}` is empty (the plugin was loaded via
 `--plugin-dir` and the variable isn't set), run from the plugin directory
 instead:
@@ -131,12 +164,14 @@ regardless of how many findings it found. Parse that object. Its shape:
   },
   "configSources": [ /* settings files reconciled, by precedence */ ],
   "summary": {
-    "score": 0,                         // 0–100 overall
+    "score": 0,                         // 0–100 overall (excludes ignored findings)
     "grades": {                         // per-dimension grade (e.g. A–F)
       "exposure": "F", "permissions": "C",
-      "privacy": "B", "context": "B", "leverage": "C"
+      "privacy": "B", "context": "B", "leverage": "A"
     },
-    "counts": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 }
+    "counts": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+    "ignoredCount": 0,                  // how many findings are dismissed via .fantasiaignore
+    "newCount": null                    // int when a baseline was passed; null otherwise
   },
   "findings": [
     {
@@ -151,17 +186,113 @@ regardless of how many findings it found. Parse that object. Its shape:
       "fix": "Move it to an env var; add a Read deny for this path; rotate the key.",
       "reachable": true,                // bool | null
       "autoFixable": true,              // can fantasia apply the config fix itself?
+      "ignored": false,                 // true if dismissed via .fantasiaignore (already excluded from counts/score/grades)
+      "isNew": true,                    // true|false when a baseline was passed; null otherwise
       "fingerprint": "config/old.js:reachable-secret:14"
     }
   ]
 }
 ```
 
+**Two new fields drive the M2 report shape:**
+
+- **`ignored`** — when `true`, the user previously dismissed this finding
+  (see the dismiss flow in Step 5). The scanner already excludes ignored findings
+  from `counts`, `score`, and `grades`. Do **not** put them in the main findings
+  list. List them only under a small "Previously dismissed" note (Step 3d).
+- **`isNew`** — only meaningful when you passed `--baseline`. `true` = surfaced
+  since the baseline was accepted; `false` = already present and reviewed when the
+  baseline was snapshotted; `null` = no baseline was in play. When a baseline
+  exists, lead the report with the `isNew: true` findings and clearly mark the
+  rest as already reviewed (Step 3 and Step 5).
+
+> **A note on leverage.** The scanner always grades `leverage` as `"A"` — it does
+> the deterministic checks and structurally **cannot** assess leverage. You
+> recompute the leverage grade yourself in the judgment pass (Step 2.5). Treat the
+> scanner's leverage grade as a placeholder, not a result.
+
 If the command fails to run (non-zero exit, no JSON, malformed JSON): do not
 guess and do not fall back to reading files yourself. Report plainly that the
 checkup couldn't run, show the error, and suggest the dev-fallback invocation or
 checking that Node is available. Never substitute your own file reading for the
 scanner.
+
+---
+
+## Step 2.5 — The judgment pass (add what the scanner structurally can't)
+
+The scanner only does deterministic checks. Two kinds of finding are inherently
+judgment calls — the scanner can't produce them, so **you** add them here, after
+parsing the JSON and before rendering the report. Mark each one you add as a
+`[judgment]` finding so the report can flag it as your assessment, not a
+deterministic rule (per "Show your work" in the standards).
+
+Stay inside the hard rules while doing this. You still **never open a flagged
+file**. You reason only from: the scanner JSON (`configSources`, `findings`,
+`access`), the directory listing you can already see, and what the user tells
+you. If you can't ground a judgment finding in one of those, don't raise it.
+
+Keep this lightweight. Only add a finding when their actual setup warrants it —
+never pad the report with generic advice.
+
+### 2.5a — `consumer-training-on` (dimension `privacy`, severity `info`)
+
+You **cannot reliably read the user's plan tier**, so do not fabricate a
+determination. Handle it honestly — frame it conditionally, or ask:
+
+> "One privacy note I can't check for you automatically — it depends on your plan:
+> if you're on a **Free, Pro, or Max** plan, your conversations and code may be
+> used to improve Anthropic's models, with about a 5-year retention window. If
+> you're on a Team or Enterprise plan, that's off by default. Worth a look either
+> way — you can review it at `claude.ai/settings/data-privacy-controls`."
+
+Never assert "your data is being used for training" as fact. If the user
+volunteers their plan, you can sharpen the wording, but the default is the
+conditional framing above. See `consumer-training-on` in
+`../../references/checks.md` for the underlying detail.
+
+### 2.5b — Leverage findings (dimension `leverage`, severity `info`)
+
+The scanner always grades `leverage` `"A"` as a placeholder. The three leverage
+checks (`repeated-prompt`, `unused-capability`, `ready-for-structure`) are all
+`[judgment]`. Assess each from the evidence you actually have — only raise the
+ones that genuinely apply:
+
+- **`unused-capability`** — infer from `configSources` and the findings whether
+  there are any skills, subagents, or memory patterns in use. The strongest
+  honest signal you have: is there a `CLAUDE.md` at all (a `no-claude-md` finding
+  means there isn't), and does the config inventory show any skills/agents/MCP?
+  If the project is clearly running on the bare chat interface, surface the single
+  most applicable next capability — not a list.
+- **`repeated-prompt`** — only if you have real evidence (e.g. the same long
+  instruction repeated in `CLAUDE.md`, or the user has pasted the same prompt in
+  this conversation). If you have no such evidence, don't raise it.
+- **`ready-for-structure`** — only if `access.filesScanned` and the config
+  picture genuinely suggest a project complex enough to benefit from a STATUS.md
+  / routing pattern. Offer the smallest next step, not a full system.
+
+See section F of `../../references/checks.md` for the framing of each.
+
+### 2.5c — Recompute the leverage grade yourself
+
+Because the scanner's leverage grade is a placeholder, you own that dimension's
+grade and its contribution to the overall picture:
+
+1. Start from "A" (nothing to improve) and step the grade down for each leverage
+   finding you actually raised, weighted by how clearly it applies — e.g. an
+   obvious `unused-capability` on a bare-chat project pulls leverage to a B or C;
+   a fully-equipped project with skills, a clean `CLAUDE.md`, and sensible
+   structure stays at A with no findings.
+2. Follow the grading bands in `../../references/standards.md` so leverage is
+   graded on the same curve as the script dimensions.
+3. In the report, **clearly note that the leverage grade is your assessment**,
+   not the scanner's — e.g. "Leverage (my read, not the scanner's): B." The
+   Safety dimensions (exposure / permissions / privacy) keep the scanner's grades
+   untouched; only leverage is re-graded by you.
+
+This does not change the scanner's numeric `score` field — present the overall
+score as the scanner reported it, and call out the leverage grade as the one
+human-assessed dimension layered on top.
 
 ---
 
@@ -179,9 +310,19 @@ into two buckets so the meaning is obvious:
   this down until fixed; say so.)
 - **Setup quality** — `context` + `leverage`.
 
+Use the scanner's grades for every dimension **except `leverage`** — that one is
+your re-graded assessment from Step 2.5c, and you say so plainly (e.g. "Leverage
+(my read, not the scanner's): B").
+
 Briefly say what the score means in human terms ("solid, a couple of things to
 tighten" / "one urgent thing, then you're in good shape"). Pull grading and
 phrasing guidance from `../../references/standards.md`.
+
+**If a baseline was in play** (you passed `--baseline` and `summary.newCount` is
+not `null`): open with what's *new*. Say plainly, e.g. "Since you accepted the
+last checkup, **{newCount} new things** have come up — those are what I'll focus
+on. Everything else was already reviewed and accepted." This is the
+score-over-time UX; the new items are the headline.
 
 ### 3b. Two access statements (keep these separate and explicit)
 
@@ -203,22 +344,62 @@ proof of the privacy promise.
 
 ### 3c. Findings
 
-Group findings by dimension; within each, sort by severity (critical → info).
+Work only from findings where `ignored` is `false` (the dismissed ones go in 3d,
+never here). Group the rest by dimension; within each, sort by severity
+(critical → info). Fold in the `[judgment]` findings you added in Step 2.5 — put
+them in their dimension (`consumer-training-on` under privacy, the leverage
+findings under leverage) and label them as your assessment, not a scanner rule.
 
-**Lead with the exposure correlations** — `reachable-secret` and any finding with
-`reachable: true`. These are the headline: a secret that Claude can actually
-reach is the thing that matters most. Put them first, above everything else.
+**Ordering, in priority order:**
 
-For each finding, show:
+1. **If a baseline is in play, the `isNew: true` findings come first**, grouped as
+   "New since you last accepted this." Within that, still lead with reachable
+   exposures. Then show the previously-accepted findings under a clearly-marked
+   "Already reviewed (accepted last time)" heading so they're visibly secondary.
+2. **Lead with the exposure correlations** — `reachable-secret` and any finding
+   with `reachable: true`. These are the headline: a secret that Claude can
+   actually reach is the thing that matters most. Put them first within their
+   group.
 
-- **Title** — the `title`, in plain language.
+**Per-file dedup (required).** The scanner emits **one `reachable-secret` (and
+one underlying secret finding) per secret**, so a single `.env` with five keys
+becomes five near-identical findings. **Collapse them.** Group secret/reachable
+findings by `file`, and render **one headline per file** that lists the affected
+line numbers and the count — so the user sees:
+
+> **`.env` — 5 exposed secrets, all reachable** (lines 3, 7, 8, 12, 14)
+> Each is a credential Claude can currently read… *(one why / evidence / fix
+> block for the file, not five)*
+
+Not five near-identical blocks. List the per-line `redactedMatch` values compactly
+under the headline if useful (e.g. `line 3: AKIA••••`, `line 7: sk-••••`), but
+keep it to one finding block per file. Preserve every distinct `fingerprint`
+internally — you'll need them all for the dismiss flow and the "Still open" list.
+
+For each finding (or each per-file group), show:
+
+- **Title** — the `title`, in plain language. For a deduped group, the file-level
+  headline above.
 - **Why it matters** — the `why`, made concrete for *their* setup. Use
   `reachable` to make it contextual (see Voice).
-- **How it was found** — the `evidence`, verbatim-ish, so they can judge it.
+- **How it was found** — the `evidence`, verbatim-ish, so they can judge it. For a
+  `[judgment]` finding, say it's your assessment, not a deterministic rule.
 - **The fix** — the `fix`, stated as the next step you'll offer in the fix loop.
 - Show `redactedMatch` (never a real value) and `file:line` so they know where.
 
 Don't dump the raw JSON. Translate it.
+
+### 3d. Previously dismissed (only if any)
+
+If `summary.ignoredCount > 0`, add a small note at the **end** of the findings,
+not woven into them:
+
+> **Previously dismissed ({ignoredCount}).** You marked these as fine in a past
+> checkup, so they're not counted in your score: ⟨list the ids + files in one
+> compact line each⟩. Say the word if you want to un-dismiss any of them.
+
+These come from `findings[]` entries where `ignored: true`. Never surface them in
+the main list, and never re-raise them as if new.
 
 ---
 
@@ -244,10 +425,12 @@ the `reachable: true` ones). For each:
      files like `.claude/settings.json`) or **Write** (to create a new file like
      `.claudeignore`). Touch only config/ignore files — never the flagged file
      that holds a secret.
-   - "Mark this as fine / not a problem" is also a valid choice — note it and
-     move on (it can be recorded as a dismissed fingerprint later).
+   - "Mark this as fine / not a problem" is also a valid choice — this is the
+     **dismiss flow** in Step 5a. Confirm it's a false positive, then record the
+     finding's `fingerprint` in `.fantasiaignore` (only after explicit approval).
 4. **After applying**, confirm what changed in one line, then move to the next
-   finding.
+   finding. Track which findings you fixed this session and which the user left
+   open — you'll need both lists for the report (Step 6).
 
 When the queue is done (or at any natural stopping point), offer to **re-run the
 scanner** to confirm the score moved — re-running Step 2 and re-rendering, so the
@@ -259,6 +442,160 @@ the user runs in the project could still read it — and whether that matters he
 depends on whether a real secret is present. If a real exposure is in play, offer
 the airtight option (turning on the sandbox via `/sandbox`). If nothing sensitive
 is there, say it's not a worry right now — just worth knowing.
+
+---
+
+## Step 5 — Dismiss and baseline (re-run hygiene)
+
+These two flows make re-runs useful: dismissing false positives, and accepting a
+known state so future checkups only surface what's new. Both **change files at the
+project root**, so both follow the same disclose-then-consent discipline as every
+other change — describe what you'll write, and apply only on an explicit yes.
+
+### 5a. Dismiss a finding ("mark as fine")
+
+When the user judges a finding to be a false positive and wants it gone from
+future checkups, append its `fingerprint` to `.fantasiaignore` at the project
+root — **only after they explicitly approve.** Each dismissal is two lines:
+
+1. A leading comment line: `# <id> on <file> — dismissed: <short reason>`
+2. The bare `fingerprint` on its own line.
+
+For example, dismissing a finding the user says is a sample/test key:
+
+```
+# secret-in-readable-file on fixtures/sample.env — dismissed: test fixture, not a real key
+fixtures/sample.env:secret-in-readable-file:3
+```
+
+Use **Edit** to append if `.fantasiaignore` already exists; **Write** to create
+it if it doesn't (read it first if it exists, so you append rather than clobber).
+One fingerprint per line; never write a secret value into it — the fingerprint is
+`path:rule:line`, which is safe. After writing, tell the user plainly: "Done —
+future checkups will skip this automatically. You can delete that line from
+`.fantasiaignore` anytime to bring it back." (The scanner reads `.fantasiaignore`
+on every run, so the next scan will report it as `ignored: true` and drop it from
+the score.)
+
+Only dismiss what the user explicitly approves, one finding at a time. Never
+dismiss a `reachable: true` exposure on the user's behalf or talk them into it —
+dismissing is for genuine false positives.
+
+### 5b. Baseline ("accept the current state")
+
+When the user wants to stop seeing the findings they've decided to live with for
+now — so future checkups surface only *new* issues — offer to snapshot the
+current state. First say what it does and where it writes:
+
+> "I can take a snapshot of everything as it stands right now and save it to
+> `.fantasia/baseline.json`. After that, every checkup will lead with anything
+> **new** since today and quietly mark the rest as already-reviewed — so you see
+> movement, not the same list every time. Nothing about your actual files
+> changes; it's just a record of what we've already looked at. Want me to?"
+
+On an explicit yes, snapshot by re-running the scanner with `--write-baseline`:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
+  --write-baseline "$PWD/.fantasia/baseline.json"
+```
+
+(Use the dev-fallback invocation if `${CLAUDE_PLUGIN_ROOT}` is unset, same as
+Step 2.) The scanner writes the baseline file itself — you don't hand-write it.
+Confirm in one line where it was saved.
+
+From then on, **every** audit run picks the baseline up automatically via the
+`--baseline` flag in Step 2 (because `$PWD/.fantasia/baseline.json` now exists),
+and the report leads with `isNew: true` findings per Step 3a/3c.
+
+Baselining is best offered *after* the fix loop — once the user has fixed what
+they want to fix, accepting the remainder is a clean stopping point.
+
+---
+
+## Step 6 — Write `FANTASIA-REPORT.md`
+
+At the end of an audit, offer to write a saved report to the project root. This
+**creates a new file**, so disclose first (the disclose-before-acting rule) with a
+one-line heads-up, then write only on a yes:
+
+> "Want me to drop a copy of this checkup in `FANTASIA-REPORT.md` at your project
+> root? It's a plain-English summary you can keep or share — no secret values in
+> it, just the redacted findings."
+
+If they decline, skip it. If they agree, use **Write** to create
+`$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md` if a path argument
+was given) using the template below.
+
+**Hard rules still apply to the file:** never write a real secret value — only
+`redactedMatch`. Apply the per-file dedup (Step 3c) here too. Keep dismissed
+findings out of the main body; they go in the small "Previously dismissed" note.
+
+### The template
+
+```markdown
+# fantasia checkup — <project name or folder>
+
+_Date: <YYYY-MM-DD> · fantasia v<fantasiaVersion> · scanned `<scannedRoot>`_
+
+## Score
+
+**<score>/100**
+
+| Dimension | Grade | Group |
+|---|---|---|
+| Exposure | <grade> | Safety |
+| Permissions | <grade> | Safety |
+| Privacy | <grade> | Safety |
+| Context | <grade> | Setup quality |
+| Leverage | <grade>* | Setup quality |
+
+\* Leverage is my assessment, not the scanner's deterministic result.
+
+<one-line plain-English read of the score; if a baseline is in play, note how many
+findings are new since it was accepted>
+
+## What this means for your setup
+
+**What Claude can reach from here.** <blast-radius summary from 3b(a): the kinds
+of files Claude can open, whether broad command (`Bash`) access is on, what
+connected tools can do, and whether anything sensitive sits inside that reach.>
+
+**What this checkup touched.** Scanned <filesScanned> files under `<scannedRoot>`;
+**read 0 file contents into this conversation**; skipped <node_modules, .git,
+binaries, ignored files>; never looked above the project folder.
+
+## Findings
+
+### Reachable exposures (start here)
+<The exposure correlations — `reachable: true`. Per-file deduped: one headline
+per file with affected line numbers and count, redacted matches, evidence, fix.
+If a baseline is in play, NEW reachable exposures go first.>
+
+### <Dimension> — <Grade>
+<Remaining findings grouped by dimension, severity-sorted, each with: title,
+why it matters (contextual via `reachable`), how it was found (evidence; flag
+`[judgment]` items as my assessment), the fix, and `file:line` + `redactedMatch`.>
+
+<...repeat per dimension...>
+
+## Fixed this session
+<Bulleted list of findings resolved during this audit — id + file + one line on
+what changed. "Nothing yet" if the user didn't apply any.>
+
+## Still open
+<Bulleted list of findings not yet addressed — id + file + the next step. These
+are what a future checkup will pick up (unless dismissed or baselined).>
+
+## Previously dismissed (<ignoredCount>)
+<Only if ignoredCount > 0: the ids + files the user marked as fine, in one
+compact line each. Omit this section entirely if there are none.>
+```
+
+Fill the placeholders from the JSON and the session. Keep the two access
+statements verbatim in intent (blast-radius and "read 0 file contents"). After
+writing, confirm the path in one line and offer the baseline (Step 5b) if you
+haven't already.
 
 ---
 
