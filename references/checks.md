@@ -1,9 +1,8 @@
 # fantasia — Audit Check Catalog
 
 This is the single source of truth for every check the `audit` skill runs.
-Derived faithfully from `plan.md §7`. When adding a new check, add it here first
-— then it automatically flows to audit (flags it), setup (prevents it), and ask
-(explains it).
+When adding a new check, add it here first — then it automatically flows to audit
+(flags it), setup (prevents it), and ask (explains it).
 
 ---
 

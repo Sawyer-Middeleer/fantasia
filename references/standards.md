@@ -46,8 +46,8 @@ Every scan and every fix is preceded by a clear, specific statement of what will
 happen, what is and isn't accessed, and waits for explicit consent before
 proceeding.
 
-**Before a scan**, show the full disclosure (see `plan.md §9` for the canonical
-text). It must cover:
+**Before a scan**, show the full disclosure (the `fantasia-safety-check` skill's
+Step 1 has the canonical text). It must cover:
 - What runs (a local script; no network calls; nothing sent anywhere)
 - What it reads (config files, project files — with exact scope)
 - What it looks for (settings, secrets, sensitive data, reachability)

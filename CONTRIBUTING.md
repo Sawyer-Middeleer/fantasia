@@ -1,46 +1,38 @@
 # Contributing to fantasia
 
-The most valuable contributions are **new checks, rules, and plain-English
-answers** — and you can add most of those without writing code. fantasia is
-designed so the community owns the knowledge, not just the maintainers.
+The most useful contributions don't need any code. fantasia's checks and answers
+live in plain data and text files, so anyone can sharpen them directly.
 
-## The contribution surface
+## What to add
 
-| Want to… | Edit | Notes |
-| --- | --- | --- |
-| Catch a new kind of secret | [`references/rules/secrets.json`](references/rules/secrets.json) | gitleaks-style: `id`, `description`, JavaScript-compatible `regex`, optional `entropy`, `keywords`. |
-| Flag a new kind of sensitive data | [`references/rules/sensitive.json`](references/rules/sensitive.json) | financial / medical / legal-pii: `keywords`, `patterns` (JS regex), `filenameGlobs`. |
-| Add a settings/permissions check | [`references/rules/settings-checks.json`](references/rules/settings-checks.json) | declarative: `id`, `dimension`, `severity`, detection hint, `fix`. |
-| Improve a finding's wording or fix | [`references/checks.md`](references/checks.md) | the human-readable catalog. |
-| Answer a beginner question better | [`references/concerns.md`](references/concerns.md) and [`references/docs/`](references/docs/) | real phrasings → plain answers, grounded in the official docs. |
+- **A new kind of secret to catch** → [`references/rules/secrets.json`](references/rules/secrets.json)
+- **A new kind of sensitive file** (financial / medical / personal) → [`references/rules/sensitive.json`](references/rules/sensitive.json)
+- **A new settings check** → [`references/rules/settings-checks.json`](references/rules/settings-checks.json)
+- **Clearer wording for a finding** → [`references/checks.md`](references/checks.md)
+- **A better plain-English answer** → [`references/concerns.md`](references/concerns.md) and [`references/docs/`](references/docs/)
 
-Add a check once and all three skills benefit: **audit** flags it, **setup**
-prevents it, **ask** explains it.
+Add a check once and all three skills benefit: the safety check flags it, setup
+prevents it, and ask explains it.
 
-## The two rules that can't bend
+## Two rules that don't bend
 
-1. **The privacy invariant.** The scanner reads file bytes; Claude only ever sees
-   **redacted** findings. Never emit a raw secret value — `redactedMatch` only.
-   Any new code must keep the final redaction safety pass intact.
-2. **Honest, contextual voice.** Plain language, grounded in what the scan
-   actually found, and clear about whether a caveat *matters right now*. See
-   [`references/standards.md`](references/standards.md) §4.
+1. **Never reveal a real secret.** The scanner reads the bytes so Claude doesn't
+   have to, and findings only ever carry a masked value — the real characters
+   replaced with dots. Any change must keep that masking intact.
+2. **Plain, honest voice.** Write for someone non-technical. Say what was actually
+   found, and whether it matters right now. See [`references/standards.md`](references/standards.md).
 
-## Working on the scanner
+## If you touch the scanner
 
 ```bash
-node test/run.mjs                              # the smoke suite (must stay green)
-node bin/fantasia-scan test/fixtures --json --no-user-config   # see raw output
-claude plugin validate .                       # structure check
+node test/run.mjs            # the test suite — keep it green
+claude plugin validate .    # structure check
 ```
 
-The scanner is **zero-dependency Node** and must stay cross-platform (Windows,
-macOS, Linux) — Node built-ins only, no `npm install`. If you add a rule, add a
-fixture and an assertion to `test/run.mjs` that proves it fires **and** that the
-secret stays redacted.
+It's plain Node with no dependencies and runs on Windows, macOS, and Linux. If
+you add a rule, add a test that proves it fires and that the secret stays masked.
 
 ## Pull requests
 
-Branch, keep changes focused, run the smoke suite and `plugin validate`, and
-describe what a user would see differently. Thank you for helping keep the
-brooms in their lane. 🪄
+Keep changes focused, run the tests, and say what a user would see differently.
+Thanks for helping keep the brooms in their lane. 🪄
