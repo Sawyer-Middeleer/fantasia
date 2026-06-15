@@ -2,7 +2,7 @@
 
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-da7756)
 ![plugin validate](https://img.shields.io/badge/plugin%20validate-passing-3fb950)
-![tests](https://img.shields.io/badge/scanner%20tests-41%2F41-3fb950)
+![tests](https://img.shields.io/badge/scanner%20tests-passing-3fb950)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 > One day the sorcerer's apprentice got bored of doing his chores, so he decided to automate his work... but not before checking his agents for loose permissions 😉
