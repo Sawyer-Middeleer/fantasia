@@ -24,7 +24,7 @@ so re-runs only surface what's new.
 **The flow, end to end:** disclose & consent (Step 1) → run the scanner (Step 2) →
 add the judgment findings the scanner can't (Step 2.5) → render the report
 (Step 3) → fix loop (Step 4) → dismiss / baseline for clean re-runs (Step 5) →
-write `FANTASIA-REPORT.md` (Step 6).
+save the checkup as a visual page and/or written summary (Step 6).
 
 The detail lives in the shared reference files — consult them as you go:
 
@@ -552,19 +552,57 @@ they want to fix, accepting the remainder is a clean stopping point.
 
 ---
 
-## Step 6 — Write `FANTASIA-REPORT.md`
+## Step 6 — Save the checkup (a visual page, a written summary, or both)
 
-At the end of an audit, offer to write a saved report to the project root. This
-**creates a new file**, so disclose first (the disclose-before-acting rule) with a
-one-line heads-up, then write only on a yes:
+At the end of an audit, offer to save a copy to the project root. There are two
+formats, and the user can take either or both:
 
-> "I can drop a plain-English copy of this checkup in `FANTASIA-REPORT.md` at your
-> project root — something you can keep or share. No secret values, just the
-> redacted findings."
+- **A visual page** (`FANTASIA-REPORT.html`) — a single self-contained page they
+  open in a browser: a warm map of what Claude can actually reach, the score, the
+  five grades, and the findings. Best for seeing the picture at a glance, and the
+  easiest thing to share or keep.
+- **A written summary** (`FANTASIA-REPORT.md`) — the same checkup in plain English.
+  Best for skimming in an editor or pasting into notes.
 
-Then ask with the **AskUserQuestion** tool (header `Save report`): **Save the
-report** · **No thanks**. On **No thanks**, skip it. On **Save the report**, use
-**Write** to create `$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md`
+Both **create a new file**, so disclose first (the disclose-before-acting rule)
+with a one-line heads-up, then write only on a yes:
+
+> "I can save a copy of this checkup at your project root — either a visual page
+> you open in your browser, a plain-English written summary, or both. No secret
+> values either way; just the masked findings."
+
+Then ask with the **AskUserQuestion** tool (header `Save report`):
+**A visual page** · **A written summary** · **Both** · **No thanks**. On
+**No thanks**, skip it. Otherwise produce the chosen format(s) as below.
+
+### 6a. The visual page (`FANTASIA-REPORT.html`)
+
+Generate it straight from the scanner — pipe the same scan you ran in Step 2 into
+the bundled renderer:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
+  | node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-visual" --out "$PWD/FANTASIA-REPORT.html"
+```
+
+If a baseline exists, add `--baseline "$PWD/.fantasia/baseline.json"` to the
+**scan** side, exactly as in Step 2 (the page then leads with what's new). Use the
+dev-fallback `node bin/...` form if `${CLAUDE_PLUGIN_ROOT}` is unset.
+
+The renderer consumes ONLY the scanner's already-redacted JSON and HTML-escapes
+every value, so the page can never contain a raw secret — the same guarantee as
+the written report, enforced mechanically rather than by careful wording. You do
+not assemble this file by hand; the renderer writes it.
+
+Then point them to it. The safest, terminal-free line for a non-technical reader
+is: *"It's saved as `FANTASIA-REPORT.html` in your project folder — double-click
+it to open."* If they'd rather you open it for them, use the platform opener
+(`start "" FANTASIA-REPORT.html` on Windows, `open FANTASIA-REPORT.html` on macOS,
+`xdg-open FANTASIA-REPORT.html` on Linux). Confirm the path in one line.
+
+### 6b. The written summary (`FANTASIA-REPORT.md`)
+
+Use **Write** to create `$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md`
 if a path argument was given) using the template below.
 
 **Hard rules still apply to the file:** never write a real secret value — only

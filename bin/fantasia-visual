@@ -1,0 +1,707 @@
+#!/usr/bin/env node
+/*
+ * fantasia-visual — render a scan's redacted JSON into a single self-contained
+ * HTML page: a warm, legible "reachability map" of your project's safety health.
+ *
+ * Zero external dependencies (Node built-ins only). Cross-platform.
+ *
+ * It reads ONLY the redacted JSON that `fantasia-scan --json` produces — never a
+ * project file. A raw secret value never enters here; the scan already redacted
+ * everything (we only ever show `redactedMatch`, e.g. AKIA••••).
+ *
+ * Usage:
+ *   node bin/fantasia-scan <path> --json | node bin/fantasia-visual --out report.html
+ *   node bin/fantasia-visual scan.json --out report.html
+ *   node bin/fantasia-visual scan.json            # HTML to stdout
+ *
+ * Design (v1): credibility-first, charm as accent. The center of gravity is the
+ * reachability picture — what sensitive thing Claude can actually reach — framed
+ * by the score, the five grades, and the "read 0 file contents" trust proof.
+ */
+
+'use strict';
+
+const fs = require('fs');
+
+// ---------------------------------------------------------------------------
+// Arg parsing
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const args = { input: null, out: null, title: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--out') args.out = argv[++i];
+    else if (a.startsWith('--out=')) args.out = a.slice('--out='.length);
+    else if (a === '--title') args.title = argv[++i];
+    else if (a.startsWith('--title=')) args.title = a.slice('--title='.length);
+    else if (a.startsWith('--')) { /* ignore unknown flags */ }
+    else if (args.input === null) args.input = a;
+  }
+  return args;
+}
+
+function readInput(inputPath) {
+  // From a file arg, or stdin (fd 0) when piped.
+  if (inputPath) return fs.readFileSync(inputPath, 'utf8');
+  return fs.readFileSync(0, 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// HTML escaping — every dynamic string passes through this before it lands in
+// the document, so a redacted match or filename can never break out into markup.
+// ---------------------------------------------------------------------------
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ---------------------------------------------------------------------------
+// Severity / grade helpers
+// ---------------------------------------------------------------------------
+
+const SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+
+function worseSeverity(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return (SEVERITY_RANK[a] || 0) >= (SEVERITY_RANK[b] || 0) ? a : b;
+}
+
+// ---------------------------------------------------------------------------
+// Model — shape the raw scan JSON into exactly what the page draws.
+//
+// The map's nodes are FILES that hold something sensitive (the `exposure`
+// dimension). A file node is "reachable" when any finding on it is reachable.
+// Settings-level findings (permissions / privacy / context) are not files on the
+// map — they describe HOW MUCH reach Claude has, and frame the picture instead.
+// ---------------------------------------------------------------------------
+
+function buildModel(scan, titleOverride) {
+  const summary = scan.summary || {};
+  const access = scan.access || {};
+  const all = Array.isArray(scan.findings) ? scan.findings : [];
+
+  // Dismissed findings never appear — the scanner already excluded them from
+  // the score; we keep them out of the picture too.
+  const findings = all.filter((f) => !f.ignored);
+
+  const baselineActive = summary.newCount != null;
+
+  // --- Exposure files (the map nodes) ---------------------------------------
+  // Group exposure findings by file, deduping the secret/sensitive item by line
+  // so a single .env with five keys is one node with five marks, not five nodes.
+  const fileMap = new Map();
+  for (const f of findings) {
+    if (f.dimension !== 'exposure' || !f.file) continue;
+    let node = fileMap.get(f.file);
+    if (!node) {
+      node = {
+        file: f.file,
+        reachable: false,
+        severity: null,
+        isNew: false,
+        marks: new Map(), // key: line or `_<id>` -> { line, redactedMatch }
+      };
+      fileMap.set(f.file, node);
+    }
+    if (f.reachable === true) node.reachable = true;
+    if (f.isNew === true) node.isNew = true;
+    node.severity = worseSeverity(node.severity, f.severity);
+    // `reachable-secret` is a correlation marker for an underlying secret/sensitive
+    // finding on the same file — it flips reachability but is not its own item.
+    if (f.id === 'reachable-secret') continue;
+    // Dedup a secret by line; file-level (line-null) findings stay distinct by id
+    // so two different categories on one file aren't collapsed into one.
+    const key = f.line == null ? '_' + f.id : String(f.line);
+    const existing = node.marks.get(key);
+    // Prefer a mark that carries a redactedMatch (the raw secret finding) over a
+    // bare correlation marker for the same line.
+    if (!existing || (!existing.redactedMatch && f.redactedMatch)) {
+      node.marks.set(key, { line: f.line, redactedMatch: f.redactedMatch || (existing && existing.redactedMatch) || null });
+    }
+  }
+
+  const exposureFiles = Array.from(fileMap.values())
+    .map((n) => ({
+      file: n.file,
+      reachable: n.reachable,
+      severity: n.severity,
+      isNew: n.isNew,
+      count: n.marks.size,
+      marks: Array.from(n.marks.values()).sort((a, b) => (a.line || 0) - (b.line || 0)),
+    }))
+    // Reachable first; in baseline mode, new before reviewed; then severity, then count.
+    .sort((a, b) => {
+      if (a.reachable !== b.reachable) return a.reachable ? -1 : 1;
+      if (baselineActive && a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+      const s = (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
+      if (s !== 0) return s;
+      return b.count - a.count;
+    });
+
+  const reachableCount = exposureFiles.filter((n) => n.reachable).length;
+
+  // The "safe bulk": how many scanned files are NOT flagged. Honest count; the
+  // page renders a capped number of muted dots so the red nodes read against it.
+  const flaggedFileCount = exposureFiles.length;
+  const safeFileCount = Math.max(toInt(access.filesScanned) - flaggedFileCount, 0);
+
+  // --- Reach posture (drives glow width/brightness, subtly) -----------------
+  // Permissions grade is the honest proxy for how wide Claude's reach is.
+  const grades = summary.grades || {};
+  const permGrade = grades.permissions || null;
+
+  // --- Settings findings (framing, not map nodes) ---------------------------
+  const settingsFindings = findings
+    .filter((f) => f.dimension !== 'exposure')
+    .sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
+
+  // --- Headline: one plain sentence, derived from what was actually found ----
+  const headline = buildHeadline({
+    score: summary.score,
+    reachableCount,
+    counts: summary.counts || {},
+    baselineActive,
+    newCount: summary.newCount,
+  });
+
+  // Coerce every number that lands in the page to an integer. The scanner always
+  // emits integers here, but this renderer also accepts an arbitrary JSON file, so
+  // a non-numeric value must never survive into an `innerHTML` string downstream.
+  const counts = {
+    critical: toInt((summary.counts || {}).critical),
+    high: toInt((summary.counts || {}).high),
+    medium: toInt((summary.counts || {}).medium),
+    low: toInt((summary.counts || {}).low),
+  };
+
+  return {
+    title: titleOverride || projectName(scan.scannedRoot),
+    score: typeof summary.score === 'number' ? summary.score : 0,
+    grades,
+    permGrade,
+    counts,
+    baselineActive,
+    newCount: summary.newCount,
+    headline,
+    access: {
+      filesScanned: toInt(access.filesScanned),
+      contentsReadIntoContext: toInt(access.contentsReadIntoContext),
+    },
+    exposureFiles,
+    safeFileCount,
+    settingsFindings,
+  };
+}
+
+// Coerce to a non-negative integer; anything non-numeric (including injected
+// markup like "<img onerror=…>") collapses to 0.
+function toInt(v) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function projectName(root) {
+  if (!root) return 'your project';
+  const parts = String(root).split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : 'your project';
+}
+
+function buildHeadline({ score, reachableCount, counts, baselineActive, newCount }) {
+  if (baselineActive && newCount === 0) {
+    return 'Nothing new since your last checkup — you’re holding steady.';
+  }
+  if (baselineActive && newCount > 0) {
+    return 'Since your last checkup, ' + newCount + (newCount === 1 ? ' new thing needs' : ' new things need') + ' a look.';
+  }
+  if (reachableCount > 0) {
+    const noun = reachableCount === 1 ? 'one sensitive file' : `${reachableCount} sensitive files`;
+    return `Start here: ${noun} Claude can actually reach. Then a few cleanups.`;
+  }
+  if ((counts.critical || 0) + (counts.high || 0) > 0) {
+    return 'A couple of things worth tightening — nothing reachable is exposed.';
+  }
+  if (score >= 85) return 'Your setup’s in good shape — just a couple of small notes.';
+  return 'A few things worth knowing, none of them urgent.';
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+function renderHtml(model) {
+  // The page draws itself from this single embedded blob — no network, no deps.
+  const data = JSON.stringify({
+    title: model.title,
+    score: model.score,
+    grades: model.grades,
+    permGrade: model.permGrade,
+    counts: model.counts,
+    headline: model.headline,
+    access: model.access,
+    baselineActive: model.baselineActive,
+    newCount: model.newCount,
+    exposureFiles: model.exposureFiles,
+    safeFileCount: model.safeFileCount,
+    settingsFindings: model.settingsFindings.map((f) => ({
+      title: f.title, severity: f.severity, file: f.file,
+    })),
+  })
+    // Guard the closing-tag sequence so the JSON can't break out of <script>.
+    .replace(/</g, '\\u003c');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasia — ${esc(model.title)}</title>
+<style>${STYLE}</style>
+</head>
+<body>
+<main id="stage" aria-live="polite">
+  <noscript><p class="noscript">This report animates with JavaScript, but every finding is also listed in plain text below.</p></noscript>
+</main>
+<script>
+const DATA = JSON.parse("${jsString(data)}");
+${SCRIPT}
+</script>
+</body>
+</html>
+`;
+}
+
+// Encode a JSON string for safe embedding inside a double-quoted JS string.
+function jsString(s) {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+// ---------------------------------------------------------------------------
+// STYLE — warm "apprentice's workshop at night" palette over an honest diagram.
+// Charm as accent (a star motif, a broom glyph), not as the structure.
+// ---------------------------------------------------------------------------
+
+const STYLE = `
+:root {
+  --ink: #1a1730;
+  --night: #100d22;
+  --night-2: #1b1740;
+  --parchment: #f4ecd8;
+  --parchment-2: #e9dcbf;
+  --gold: #e8b54b;
+  --gold-soft: #f0cd84;
+  --danger: #e2563f;
+  --danger-soft: #f08a76;
+  --safe: #6fae8f;
+  --muted: #8b86a6;
+  --line: rgba(255,255,255,0.10);
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font);
+  color: var(--parchment);
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #241d52 0%, transparent 60%),
+    linear-gradient(180deg, var(--night-2) 0%, var(--night) 100%);
+  height: 100vh;
+  overflow: hidden;            /* the whole checkup fits one screen — no scroll */
+  padding: 16px 20px;
+}
+#stage { width: 100%; max-width: 1240px; margin: 0 auto; height: 100%; display: flex; flex-direction: column; gap: 12px; }
+.noscript { color: var(--parchment); }
+
+/* Top band — identity + headline (left), score + grades + counts (right) */
+.band { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex: none; }
+.band-l { min-width: 0; }
+.kicker { letter-spacing: 0.24em; text-transform: uppercase; font-size: 11px; color: var(--gold); opacity: 0.85; }
+.kicker .star { color: var(--gold-soft); }
+.project { font-family: var(--serif); font-size: 25px; margin: 1px 0; line-height: 1.1; }
+.headline { font-size: 15px; color: var(--parchment-2); margin: 0; line-height: 1.35; max-width: 560px; }
+.band-r { display: flex; align-items: center; gap: 16px; flex: none; }
+
+/* Score ring */
+.scorering { position: relative; width: 92px; height: 92px; flex: none; }
+.scorering svg { transform: rotate(-90deg); }
+.scorenum { position: absolute; inset: 0; display: grid; place-items: center; }
+.scorenum b { font-size: 28px; font-family: var(--serif); line-height: 1; }
+.scorenum span { font-size: 10px; color: var(--muted); }
+
+/* Grades + counts */
+.gradecol { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+.grades { display: flex; gap: 6px; }
+.grade { display: flex; flex-direction: column; align-items: center; gap: 1px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 9px; min-width: 50px; }
+.grade .g { font-family: var(--serif); font-size: 18px; line-height: 1; }
+.grade .lbl { font-size: 8.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.grade.gA .g { color: var(--safe); } .grade.gB .g { color: var(--gold-soft); }
+.grade.gC .g { color: var(--gold); } .grade.gD .g { color: var(--danger-soft); }
+.grade.gF .g { color: var(--danger); }
+.counts { font-size: 11px; color: var(--muted); }
+.counts b { color: var(--parchment-2); font-weight: 600; }
+.counts .crit { color: var(--danger-soft); }
+.gnote { font-size: 9px; color: var(--muted); }
+
+/* Main grid — reach map (left) | findings (right) */
+.grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+.map-col { position: relative; min-height: 0; display: flex; flex-direction: column;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 2px; }
+.map-box { position: relative; flex: 1; min-height: 0; }
+.map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.legend { display: flex; gap: 14px; justify-content: center; padding: 3px 0 1px; font-size: 11px; color: var(--muted); flex: none; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.legend .dz { background: var(--danger); } .legend .sf { background: var(--safe); } .legend .ap { background: var(--gold); }
+
+/* Findings column */
+.find-col { min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.section { min-height: 0; display: flex; flex-direction: column; }
+.section.reachsec { flex: none; }
+.section.settingsec { flex: 1; min-height: 0; }
+.section h2 { font-family: var(--serif); font-size: 15px; margin: 0 0 6px; color: var(--parchment); }
+.section h2 small { font-family: var(--font); font-size: 11px; color: var(--muted); font-weight: 400; }
+.flist { overflow-y: auto; min-height: 0; padding-right: 4px; }
+
+/* Dense reachable-file rows */
+.frow { display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; border-radius: 8px;
+  background: rgba(226,86,63,0.08); border: 1px solid rgba(226,86,63,0.32); margin-bottom: 5px; font-size: 12px; }
+.frow.safe { background: rgba(255,255,255,0.03); border-color: var(--line); }
+.frow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; align-self: center; }
+.frow.safe .dot { background: var(--muted); }
+.frow .fn { font-family: var(--serif); font-size: 13px; color: var(--parchment); }
+.frow .meta { color: var(--muted); }
+.frow .reach { color: var(--danger-soft); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; }
+.frow .newt { color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; }
+.frow code { background: rgba(0,0,0,0.3); padding: 0 5px; border-radius: 5px; font-size: 11px; color: var(--parchment-2); margin-left: auto; }
+
+/* Dense settings rows */
+.srow { font-size: 11.5px; line-height: 1.5; color: var(--parchment-2); }
+.srow .sev { display: inline-block; min-width: 50px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; }
+.sev.s-critical, .sev.s-high { color: var(--danger-soft); }
+.sev.s-medium { color: var(--gold-soft); }
+.sev.s-low, .sev.s-info { color: var(--muted); }
+.srow .file { color: var(--muted); }
+
+/* Slim trust footer */
+.trust { flex: none; text-align: center; font-size: 12px; color: var(--parchment-2);
+  background: rgba(111,174,143,0.08); border: 1px solid rgba(111,174,143,0.22); border-radius: 10px; padding: 7px 12px; }
+.trust b { color: var(--safe); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+`;
+
+// ---------------------------------------------------------------------------
+// SCRIPT — builds the DOM from DATA and runs the one meaningful motion:
+// the "reach" extending from the apprentice and landing on each reachable file.
+// ---------------------------------------------------------------------------
+
+const SCRIPT = String.raw`
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var stage = document.getElementById('stage');
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    if (attrs) for (var k in attrs) { if (k === 'class') n.className = attrs[k]; else if (k === 'html') n.innerHTML = attrs[k]; else n.setAttribute(k, attrs[k]); }
+    (kids || []).forEach(function (c) { n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS(SVGNS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); return n; }
+  function gradeClass(g) { return 'grade g' + (g || '').charAt(0).toUpperCase(); }
+
+  // ---- Top band: identity (left) + score / grades / counts (right) ----
+  var bandL = el('div', { class: 'band-l' }, [
+    el('div', { class: 'kicker', html: '<span class="star">✦</span> Fantasia safety check' }),
+    el('div', { class: 'project' }, [DATA.title]),
+    el('p', { class: 'headline' }, [DATA.headline]),
+  ]);
+
+  var R = 42, C = 2 * Math.PI * R;
+  var ring = svg('svg', { width: 92, height: 92, viewBox: '0 0 92 92' });
+  ring.appendChild(svg('circle', { cx: 46, cy: 46, r: R, fill: 'none', stroke: 'rgba(255,255,255,0.10)', 'stroke-width': 8 }));
+  var arc = svg('circle', { cx: 46, cy: 46, r: R, fill: 'none', stroke: scoreColor(DATA.score), 'stroke-width': 8, 'stroke-linecap': 'round', 'stroke-dasharray': C, 'stroke-dashoffset': C });
+  ring.appendChild(arc);
+  var ringWrap = el('div', { class: 'scorering' }, [ring, el('div', { class: 'scorenum' }, [el('b', { id: 'scoreNum' }, ['0']), el('span', {}, ['/ 100'])])]);
+
+  var GLABELS = [['exposure','Expo'],['permissions','Perms'],['privacy','Privacy'],['context','Context'],['leverage','Lev']];
+  var grades = el('div', { class: 'grades' }, GLABELS.map(function (p) {
+    var g = (DATA.grades && DATA.grades[p[0]]) || '–';
+    var chip = el('div', { class: gradeClass(g) }, [el('span', { class: 'g' }, [g]), el('span', { class: 'lbl' }, [p[1]])]);
+    if (p[0] === 'leverage') chip.setAttribute('title', 'Leverage is assessed separately, not by the scanner.');
+    return chip;
+  }));
+  var cc = DATA.counts || {};
+  var cb = [];
+  if (cc.critical) cb.push('<span class="crit"><b>' + cc.critical + '</b> critical</span>');
+  if (cc.high) cb.push('<b>' + cc.high + '</b> high');
+  if (cc.medium) cb.push('<b>' + cc.medium + '</b> medium');
+  if (cc.low) cb.push('<b>' + cc.low + '</b> low');
+  var gradeCol = el('div', { class: 'gradecol' }, [
+    grades,
+    el('div', { class: 'counts', html: cb.join(' · ') || 'no issues found' }),
+    el('div', { class: 'gnote' }, ['Leverage assessed separately']),
+  ]);
+  stage.appendChild(el('div', { class: 'band' }, [bandL, el('div', { class: 'band-r' }, [ringWrap, gradeCol])]));
+
+  // ---- Main grid: reach map | findings ----
+  stage.appendChild(el('div', { class: 'grid' }, [buildMap(), buildFindings()]));
+
+  // ---- Slim trust footer ----
+  var a = DATA.access;
+  stage.appendChild(el('div', { class: 'trust', html:
+    'Scanned <b>' + a.filesScanned + '</b> files · <b>read ' + a.contentsReadIntoContext + ' file contents into this conversation</b> · never looked above your project folder · every value masked.' }));
+
+  // ---- Animations ----
+  if (reduce) {
+    arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
+    document.getElementById('scoreNum').textContent = String(DATA.score);
+    settleMap();
+  } else {
+    animateScore(arc, C);
+    animateMap();
+    // Safety net: rAF and CSS transitions are throttled when a tab is in the
+    // background, which would freeze the count-up and the reach mid-flight.
+    // Guarantee the resting state lands regardless, a beat after the sequence.
+    setTimeout(function () {
+      arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
+      document.getElementById('scoreNum').textContent = String(DATA.score);
+      settleMap();
+    }, 4200);
+  }
+
+  // =====================================================================
+  function scoreColor(s) { return s >= 85 ? '#6fae8f' : s >= 60 ? '#e8b54b' : '#e2563f'; }
+
+  function animateScore(arcEl, circ) {
+    var target = DATA.score, start = null, dur = 1100;
+    var label = document.getElementById('scoreNum');
+    function step(t) {
+      if (start === null) start = t;
+      var p = Math.min((t - start) / dur, 1), eased = 1 - Math.pow(1 - p, 3);
+      arcEl.setAttribute('stroke-dashoffset', String(circ * (1 - (target / 100) * eased)));
+      label.textContent = String(Math.round(target * eased));
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function mapGeom() {
+    var W = 600, H = 560, cx = W / 2, cy = H / 2;
+    var files = DATA.exposureFiles || [];
+    var n = files.length || 1;
+    var ringR = Math.min(200, 130 + n * 12);
+    var nodes = files.map(function (f, i) {
+      var ang = (-Math.PI / 2) + (2 * Math.PI * i / n);
+      return { f: f, x: cx + ringR * Math.cos(ang), y: cy + ringR * Math.sin(ang) };
+    });
+    return { W: W, H: H, cx: cx, cy: cy, ringR: ringR, nodes: nodes };
+  }
+
+  function buildMap() {
+    var g = mapGeom();
+    var s = svg('svg', { class: 'map', viewBox: '0 0 ' + g.W + ' ' + g.H, preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'A map of files Claude can reach. Files with sensitive contents that Claude can reach are shown in red.' });
+
+    // soft reach glow behind the apprentice — width nods to permissions breadth
+    var glowR = DATA.permGrade && /^[DF]/.test(DATA.permGrade) ? g.ringR + 64 : g.ringR + 24;
+    var glow = svg('circle', { cx: g.cx, cy: g.cy, r: glowR, fill: 'url(#reachGlow)', opacity: 0 });
+    glow.setAttribute('id', 'reachGlow-c');
+    var defs = svg('defs', {});
+    var rad = svg('radialGradient', { id: 'reachGlow' });
+    rad.appendChild(svg('stop', { offset: '0%', 'stop-color': 'rgba(232,181,75,0.20)' }));
+    rad.appendChild(svg('stop', { offset: '100%', 'stop-color': 'rgba(232,181,75,0)' }));
+    defs.appendChild(rad); s.appendChild(defs); s.appendChild(glow);
+
+    // safe bulk — muted dots scattered in a soft annulus, capped
+    var safe = Math.min(DATA.safeFileCount, 40), safeG = svg('g', { id: 'safeDots' });
+    for (var i = 0; i < safe; i++) {
+      var ang = (i / Math.max(safe, 1)) * 2 * Math.PI + 0.6, rr = g.ringR + 70 + (i % 5) * 9;
+      var d = svg('circle', { cx: g.cx + rr * Math.cos(ang), cy: g.cy + rr * Math.sin(ang) * 0.55, r: 2.4, fill: '#6fae8f', opacity: 0 });
+      safeG.appendChild(d);
+    }
+    s.appendChild(safeG);
+
+    // reach lines (apprentice -> reachable files) + file nodes
+    var lines = svg('g', { id: 'reachLines' }), nodesG = svg('g', { id: 'fileNodes' });
+    g.nodes.forEach(function (nd, i) {
+      var reach = nd.f.reachable;
+      if (reach) {
+        var ln = svg('line', { x1: g.cx, y1: g.cy, x2: nd.x, y2: nd.y, stroke: '#e2563f', 'stroke-width': 2, 'stroke-dasharray': 6, opacity: 0 });
+        ln.setAttribute('data-i', i); lines.appendChild(ln);
+      }
+      var color = reach ? '#e2563f' : '#8b86a6';
+      var grp = svg('g', { 'data-i': i, opacity: 0 }); grp.setAttribute('class', 'fnode');
+      grp.appendChild(svg('circle', { cx: nd.x, cy: nd.y, r: reach ? 13 : 9, fill: reach ? 'rgba(226,86,63,0.18)' : 'rgba(139,134,166,0.15)', stroke: color, 'stroke-width': 2 }));
+      if (nd.f.count > 1) {
+        var badge = svg('text', { x: nd.x, y: nd.y + 4, 'text-anchor': 'middle', 'font-size': 11, fill: color, 'font-weight': 'bold' });
+        badge.textContent = String(nd.f.count); grp.appendChild(badge);
+      }
+      var label = svg('text', { x: nd.x, y: nd.y + (nd.y > g.cy ? 30 : -22), 'text-anchor': 'middle', 'font-size': 13, fill: '#f4ecd8' });
+      label.textContent = baseName(nd.f.file); grp.appendChild(label);
+      if (reach) {
+        var tag = svg('text', { x: nd.x, y: nd.y + (nd.y > g.cy ? 46 : -38), 'text-anchor': 'middle', 'font-size': 10, fill: '#f08a76' });
+        tag.textContent = 'reachable'; grp.appendChild(tag);
+      }
+      nodesG.appendChild(grp);
+    });
+    s.appendChild(lines); s.appendChild(nodesG);
+
+    // the apprentice (center) — a small broom glyph in a gold disc
+    var app = svg('g', { id: 'apprentice' });
+    app.appendChild(svg('circle', { cx: g.cx, cy: g.cy, r: 24, fill: 'rgba(232,181,75,0.16)', stroke: '#e8b54b', 'stroke-width': 2 }));
+    var broom = svg('text', { x: g.cx, y: g.cy + 7, 'text-anchor': 'middle', 'font-size': 22 });
+    broom.textContent = '🧹'; app.appendChild(broom);
+    var cap = svg('text', { x: g.cx, y: g.cy + 44, 'text-anchor': 'middle', 'font-size': 12, fill: '#f0cd84' });
+    cap.textContent = 'Claude'; app.appendChild(cap);
+    // Empty state: nothing sensitive is in reach — say so plainly, warmly.
+    if (!(DATA.exposureFiles || []).length) {
+      var clear = svg('text', { x: g.cx, y: g.cy + 92, 'text-anchor': 'middle', 'font-size': 15, fill: '#6fae8f' });
+      clear.textContent = 'Nothing sensitive is in reach.'; app.appendChild(clear);
+    }
+    s.appendChild(app);
+
+    var legend = el('div', { class: 'legend' }, [
+      el('span', { html: '<i class="ap"></i>What Claude can reach' }),
+      el('span', { html: '<i class="dz"></i>Sensitive &amp; reachable' }),
+      el('span', { html: '<i class="sf"></i>Everything else (safe)' }),
+    ]);
+    return el('div', { class: 'map-col' }, [el('div', { class: 'map-box' }, [s]), legend]);
+  }
+
+  function settleMap() {
+    document.getElementById('reachGlow-c').setAttribute('opacity', '1');
+    each('#safeDots circle', function (d) { d.setAttribute('opacity', '0.5'); });
+    each('#reachLines line', function (l) { l.setAttribute('opacity', '0.9'); });
+    each('#fileNodes .fnode', function (g) { g.setAttribute('opacity', '1'); });
+  }
+
+  function animateMap() {
+    fade('#reachGlow-c', 1, 300);
+    each('#fileNodes .fnode', function (g, i) { setTimeout(function () { fadeEl(g, 1, 260); }, 250 + i * 90); });
+    each('#safeDots circle', function (d, i) { setTimeout(function () { fadeEl(d, 0.5, 400); }, 400 + i * 14); });
+    // the one meaningful motion: the reach reaches out and lands on each red file
+    var lines = document.querySelectorAll('#reachLines line');
+    Array.prototype.forEach.call(lines, function (ln, i) {
+      var len = lineLen(ln);
+      ln.style.strokeDasharray = len; ln.style.strokeDashoffset = len; ln.setAttribute('opacity', '0.9');
+      setTimeout(function () {
+        ln.style.transition = 'stroke-dashoffset .5s ease-out';
+        ln.style.strokeDashoffset = '0';
+        var i2 = ln.getAttribute('data-i');
+        setTimeout(function () { pulse(document.querySelector('#fileNodes .fnode[data-i="' + i2 + '"] circle')); }, 480);
+      }, 700 + i * 320);
+    });
+  }
+
+  function pulse(circle) {
+    if (!circle) return;
+    var r0 = +circle.getAttribute('r'), t0 = null;
+    function step(t) { if (t0 === null) t0 = t; var p = Math.min((t - t0) / 520, 1);
+      circle.setAttribute('r', String(r0 + Math.sin(p * Math.PI) * 6)); if (p < 1) requestAnimationFrame(step); else circle.setAttribute('r', String(r0)); }
+    requestAnimationFrame(step);
+  }
+
+  function buildFindings() {
+    var col = el('div', { class: 'find-col' });
+    var files = DATA.exposureFiles || [];
+    var reach = files.filter(function (f) { return f.reachable; });
+    var other = files.filter(function (f) { return !f.reachable; });
+    // Only files Claude can actually reach go under the reach heading; sensitive
+    // files it cannot reach (e.g. protected by a deny rule) are shown separately.
+    if (reach.length) col.appendChild(fileSection('Files Claude can reach', reach, true));
+    if (other.length) col.appendChild(fileSection('Other sensitive files (not reachable)', other, false));
+    var sf = DATA.settingsFindings || [];
+    if (sf.length) {
+      var items = sf.map(function (f) {
+        return el('div', { class: 'srow', html:
+          '<span class="sev s-' + escJs(f.severity) + '">' + escJs(f.severity) + '</span> ' + escJs(f.title) +
+          (f.file ? ' <span class="file">' + escJs(f.file) + '</span>' : '') });
+      });
+      col.appendChild(el('div', { class: 'section settingsec' }, [
+        el('h2', { html: 'Your settings <small>' + sf.length + '</small>' }),
+        el('div', { class: 'flist' }, items),
+      ]));
+    }
+    return col;
+  }
+
+  function fileSection(title, list, reachable) {
+    var rows = list.map(function (f) {
+      var sample = (f.marks.filter(function (m) { return m.redactedMatch; })[0] || {}).redactedMatch;
+      var bits = [
+        el('span', { class: 'dot' }),
+        el('span', { class: 'fn' }, [baseName(f.file)]),
+        el('span', { class: 'meta' }, [' · ' + f.count + (f.count === 1 ? ' item' : ' items') + ' · ' + (f.severity || 'info')]),
+      ];
+      if (DATA.baselineActive && f.isNew) bits.push(el('span', { class: 'newt' }, ['new']));
+      if (reachable) bits.push(el('span', { class: 'reach' }, ['reachable']));
+      if (sample) bits.push(el('code', {}, [sample]));
+      return el('div', { class: 'frow' + (reachable ? '' : ' safe'), title: f.file }, bits);
+    });
+    return el('div', { class: 'section reachsec' }, [
+      el('h2', { html: escJs(title) + ' <small>' + list.length + '</small>' }),
+      el('div', {}, rows),
+    ]);
+  }
+
+  // helpers
+  function baseName(p) { var s = String(p).split(/[\\\/]/); return s[s.length - 1]; }
+  function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
+  function fade(sel, to, ms) { var n = document.querySelector(sel); if (n) fadeEl(n, to, ms); }
+  function fadeEl(n, to, ms) { n.style.transition = 'opacity ' + ms + 'ms ease'; n.setAttribute('opacity', String(to)); }
+  function lineLen(ln) { var dx = ln.x2.baseVal.value - ln.x1.baseVal.value, dy = ln.y2.baseVal.value - ln.y1.baseVal.value; return Math.sqrt(dx*dx+dy*dy); }
+  function escJs(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+})();
+`;
+
+// ---------------------------------------------------------------------------
+// MAIN
+// ---------------------------------------------------------------------------
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  let raw;
+  try {
+    raw = readInput(args.input);
+  } catch (e) {
+    process.stderr.write(`fantasia-visual: could not read input (${e && e.message ? e.message : e}). Pipe \`fantasia-scan --json\` in, or pass a JSON file path.\n`);
+    process.exit(1);
+    return;
+  }
+
+  let scan;
+  try {
+    scan = JSON.parse(raw);
+  } catch (e) {
+    process.stderr.write(`fantasia-visual: input was not valid JSON. Expected the output of \`fantasia-scan --json\`.\n`);
+    process.exit(1);
+    return;
+  }
+
+  const model = buildModel(scan, args.title);
+  const html = renderHtml(model);
+
+  if (args.out) {
+    fs.writeFileSync(args.out, html, 'utf8');
+    process.stderr.write(`fantasia-visual: wrote ${args.out}\n`);
+  } else {
+    process.stdout.write(html);
+  }
+  process.exit(0);
+}
+
+main();
