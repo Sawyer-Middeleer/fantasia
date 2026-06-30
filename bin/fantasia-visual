@@ -29,11 +29,21 @@ const fs = require('fs');
 
 function parseArgs(argv) {
   const args = { input: null, out: null, title: null };
+  // Consume the value after a flag, erroring if it's missing or is itself a flag
+  // (otherwise `--out` with no path would silently fall through to stdout).
+  const value = (i, flag) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith('--')) {
+      process.stderr.write(`fantasia-visual: ${flag} requires a value.\n`);
+      process.exit(1);
+    }
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--out') args.out = argv[++i];
+    if (a === '--out') args.out = value(++i, '--out');
     else if (a.startsWith('--out=')) args.out = a.slice('--out='.length);
-    else if (a === '--title') args.title = argv[++i];
+    else if (a === '--title') args.title = value(++i, '--title');
     else if (a.startsWith('--title=')) args.title = a.slice('--title='.length);
     else if (a.startsWith('--')) { /* ignore unknown flags */ }
     else if (args.input === null) args.input = a;
@@ -106,6 +116,7 @@ function buildModel(scan, titleOverride) {
         reachable: false,
         severity: null,
         isNew: false,
+        why: '', fix: '',
         marks: new Map(), // key: line or `_<id>` -> { line, redactedMatch }
       };
       fileMap.set(f.file, node);
@@ -116,6 +127,8 @@ function buildModel(scan, titleOverride) {
     // `reachable-secret` is a correlation marker for an underlying secret/sensitive
     // finding on the same file — it flips reachability but is not its own item.
     if (f.id === 'reachable-secret') continue;
+    if (!node.why && f.why) node.why = f.why;
+    if (!node.fix && f.fix) node.fix = f.fix;
     // Dedup a secret by line; file-level (line-null) findings stay distinct by id
     // so two different categories on one file aren't collapsed into one.
     const key = f.line == null ? '_' + f.id : String(f.line);
@@ -133,6 +146,7 @@ function buildModel(scan, titleOverride) {
       reachable: n.reachable,
       severity: n.severity,
       isNew: n.isNew,
+      why: n.why, fix: n.fix,
       count: n.marks.size,
       marks: Array.from(n.marks.values()).sort((a, b) => (a.line || 0) - (b.line || 0)),
     }))
@@ -147,11 +161,6 @@ function buildModel(scan, titleOverride) {
 
   const reachableCount = exposureFiles.filter((n) => n.reachable).length;
 
-  // The "safe bulk": how many scanned files are NOT flagged. Honest count; the
-  // page renders a capped number of muted dots so the red nodes read against it.
-  const flaggedFileCount = exposureFiles.length;
-  const safeFileCount = Math.max(toInt(access.filesScanned) - flaggedFileCount, 0);
-
   // --- Reach posture (drives glow width/brightness, subtly) -----------------
   // Permissions grade is the honest proxy for how wide Claude's reach is.
   const grades = summary.grades || {};
@@ -161,6 +170,10 @@ function buildModel(scan, titleOverride) {
   const settingsFindings = findings
     .filter((f) => f.dimension !== 'exposure')
     .sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
+
+  // What Claude can reach, in plain phrases, grounded in the findings actually
+  // present — this is the honest descriptor under the "Claude" node in the beam.
+  const reachSummary = buildReachSummary(settingsFindings);
 
   // --- Headline: one plain sentence, derived from what was actually found ----
   const headline = buildHeadline({
@@ -195,9 +208,24 @@ function buildModel(scan, titleOverride) {
       contentsReadIntoContext: toInt(access.contentsReadIntoContext),
     },
     exposureFiles,
-    safeFileCount,
     settingsFindings,
+    reachSummary,
   };
+}
+
+// Plain-English phrases for what Claude can currently do, derived from which
+// permission/privacy findings are present. "Open files here" is always true for
+// a project agent; the rest are added only when the matching finding exists.
+function buildReachSummary(settingsFindings) {
+  const ids = new Set(settingsFindings.map((f) => f.id));
+  const has = (list) => list.some((id) => ids.has(id));
+  const out = ['open files in this project'];
+  if (has(['bash-wide-open', 'network-bash-allowed', 'env-runner-allowed', 'mode-bypass-permissions', 'mode-auto'])) {
+    out.push('run shell commands');
+  }
+  if (has(['mcp-wide-open', 'mcp-write-capable'])) out.push('use connected tools');
+  if (has(['webfetch-all-domains', 'webfetch-preflight-off'])) out.push('reach the web');
+  return out;
 }
 
 // Coerce to a non-negative integer; anything non-numeric (including injected
@@ -248,9 +276,10 @@ function renderHtml(model) {
     baselineActive: model.baselineActive,
     newCount: model.newCount,
     exposureFiles: model.exposureFiles,
-    safeFileCount: model.safeFileCount,
+    reachSummary: model.reachSummary,
     settingsFindings: model.settingsFindings.map((f) => ({
-      title: f.title, severity: f.severity, file: f.file,
+      title: f.title, severity: f.severity, file: f.file, line: f.line,
+      why: f.why, evidence: f.evidence, fix: f.fix,
     })),
   })
     // Guard the closing-tag sequence so the JSON can't break out of <script>.
@@ -266,7 +295,7 @@ function renderHtml(model) {
 </head>
 <body>
 <main id="stage" aria-live="polite">
-  <noscript><p class="noscript">This report animates with JavaScript, but every finding is also listed in plain text below.</p></noscript>
+  <noscript><p class="noscript">This report needs JavaScript to render. For a no-JavaScript version, re-run the safety check and choose the written summary.</p></noscript>
 </main>
 <script>
 const DATA = JSON.parse("${jsString(data)}");
@@ -357,44 +386,80 @@ body {
 .counts .crit { color: var(--danger-soft); }
 .gnote { font-size: 9px; color: var(--muted); }
 
-/* Main grid — reach map (left) | findings (right) */
-.grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
-.map-col { position: relative; min-height: 0; display: flex; flex-direction: column;
-  background: rgba(255,255,255,0.02); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 2px; }
-.map-box { position: relative; flex: 1; min-height: 0; }
-.map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.legend { display: flex; gap: 14px; justify-content: center; padding: 3px 0 1px; font-size: 11px; color: var(--muted); flex: none; }
-.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-.legend .dz { background: var(--danger); } .legend .sf { background: var(--safe); } .legend .ap { background: var(--gold); }
+/* One unified view — top-down hierarchy: powers → exposure → the settings behind it */
+.main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
 
-/* Findings column */
-.find-col { min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
-.section { min-height: 0; display: flex; flex-direction: column; }
-.section.reachsec { flex: none; }
-.section.settingsec { flex: 1; min-height: 0; }
-.section h2 { font-family: var(--serif); font-size: 15px; margin: 0 0 6px; color: var(--parchment); }
-.section h2 small { font-family: var(--font); font-size: 11px; color: var(--muted); font-weight: 400; }
-.flist { overflow-y: auto; min-height: 0; padding-right: 4px; }
+/* Reach hero — what Claude can do, explicitly tied to the settings below */
+.reachhero { flex: none; display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.reachhero .glyph { font-size: 26px; line-height: 1; flex: none; }
+.reachhero .who { font-family: var(--serif); font-size: 16px; color: var(--gold-soft); margin-bottom: 5px; }
+.caps { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.cap { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; background: rgba(255,255,255,0.05);
+  border: 1px solid var(--line); color: var(--parchment-2); }
+.cap.warn { background: rgba(226,86,63,0.12); border-color: rgba(226,86,63,0.40); color: var(--danger-soft); }
+.reachhero .tie { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 
-/* Dense reachable-file rows */
-.frow { display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; border-radius: 8px;
-  background: rgba(226,86,63,0.08); border: 1px solid rgba(226,86,63,0.32); margin-bottom: 5px; font-size: 12px; }
-.frow.safe { background: rgba(255,255,255,0.03); border-color: var(--line); }
-.frow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; align-self: center; }
-.frow.safe .dot { background: var(--muted); }
-.frow .fn { font-family: var(--serif); font-size: 13px; color: var(--parchment); }
-.frow .meta { color: var(--muted); }
-.frow .reach { color: var(--danger-soft); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; }
-.frow .newt { color: var(--gold); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; }
-.frow code { background: rgba(0,0,0,0.3); padding: 0 5px; border-radius: 5px; font-size: 11px; color: var(--parchment-2); margin-left: auto; }
+/* Everything below the pinned hero scrolls together when it can't fit one
+   viewport — so a project with many findings never clips its own content. */
+.scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
 
-/* Dense settings rows */
-.srow { font-size: 11.5px; line-height: 1.5; color: var(--parchment-2); }
-.srow .sev { display: inline-block; min-width: 50px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; }
+/* Stacked sections */
+.sect { display: flex; flex-direction: column; flex: none; }
+.sect h2 { font-family: var(--serif); font-size: 14px; margin: 0 0 7px; color: var(--parchment); }
+.sect h2 small { font-family: var(--font); font-size: 11px; color: var(--muted); font-weight: 400; }
+
+/* Celebration — clean state */
+.celebrate { min-height: 300px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; gap: 10px; padding: 16px; }
+.celebrate .check { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(111,174,143,0.15); border: 2px solid var(--safe); color: var(--safe); font-size: 46px; line-height: 1; }
+.celebrate .big { font-family: var(--serif); font-size: 23px; color: var(--safe); }
+.celebrate .sub { font-size: 13px; color: var(--parchment-2); max-width: 440px; line-height: 1.45; }
+/* Compact banner when sensitive-but-protected files are listed below it */
+.celebrate.compact { min-height: 0; padding: 6px 16px 14px; gap: 7px; }
+.celebrate.compact .check { width: 54px; height: 54px; font-size: 30px; border-width: 2px; }
+.celebrate.compact .big { font-size: 18px; }
+
+/* Beam rows (Claude → file) — accordion */
+.brow { border: 1px solid rgba(226,86,63,0.32); background: rgba(226,86,63,0.08); border-radius: 9px; margin-bottom: 6px; }
+.brow.safe { border-color: var(--line); background: rgba(255,255,255,0.03); }
+.bhead, .shead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.bhead { padding: 7px 10px; font-size: 12px; border-radius: 8px; }
+.bhead .arrow { color: var(--danger-soft); font-size: 11px; flex: none; }
+.brow.safe .arrow { color: var(--muted); }
+.bhead .fn { font-family: var(--serif); font-size: 13px; color: var(--parchment); }
+.bhead .meta { color: var(--muted); }
+.tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+.tag.reach { color: var(--danger-soft); }
+.tag.newt { color: var(--gold); }
+.chev { margin-left: auto; color: var(--gold-soft); font-size: 15px; line-height: 1; transition: transform .15s, opacity .15s; flex: none; opacity: 0.7; }
+.open > .bhead .chev, .open > .shead .chev { transform: rotate(90deg); opacity: 1; }
+.bhead:hover, .shead:hover { background: rgba(232,181,75,0.10); }
+.bhead:hover .chev, .shead:hover .chev { opacity: 1; }
+.hint { font-family: var(--font); font-size: 10px; color: var(--muted); font-weight: 400; margin-left: 8px; letter-spacing: 0.02em; }
+
+/* Detail panes (shared) */
+.detail { display: none; font-size: 11.5px; color: var(--parchment-2); line-height: 1.5; }
+.open > .detail { display: block; }
+.brow .detail { padding: 0 10px 9px 27px; }
+.detail .drow { margin-top: 5px; }
+.detail .lbl { color: var(--gold-soft); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; margin-right: 6px; }
+.detail code { background: rgba(0,0,0,0.3); padding: 0 5px; border-radius: 5px; font-size: 11px; }
+.detail .loc { color: var(--muted); }
+
+/* Settings accordion rows */
+.srow { border-bottom: 1px solid var(--line); }
+.srow:last-child { border-bottom: none; }
+.shead { padding: 6px 2px; font-size: 12px; }
+.shead .sev { flex: none; min-width: 52px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; align-self: center; }
 .sev.s-critical, .sev.s-high { color: var(--danger-soft); }
 .sev.s-medium { color: var(--gold-soft); }
 .sev.s-low, .sev.s-info { color: var(--muted); }
-.srow .file { color: var(--muted); }
+.shead .stitle { color: var(--parchment); }
+.shead .file { color: var(--muted); font-size: 10.5px; }
+.srow .detail { padding: 2px 2px 8px 56px; }
 
 /* Slim trust footer */
 .trust { flex: none; text-align: center; font-size: 12px; color: var(--parchment-2);
@@ -458,30 +523,38 @@ const SCRIPT = String.raw`
   ]);
   stage.appendChild(el('div', { class: 'band' }, [bandL, el('div', { class: 'band-r' }, [ringWrap, gradeCol])]));
 
-  // ---- Main grid: reach map | findings ----
-  stage.appendChild(el('div', { class: 'grid' }, [buildMap(), buildFindings()]));
+  // ---- One unified view: powers → exposure → the settings behind them ----
+  var allFiles = DATA.exposureFiles || [];
+  var reachFiles = allFiles.filter(function (f) { return f.reachable; });
+  var otherFiles = allFiles.filter(function (f) { return !f.reachable; });
+  var main = el('div', { class: 'main' }, [buildReachHero(reachFiles)]);
+  var scroll = el('div', { class: 'scroll' });
+  scroll.appendChild(reachFiles.length ? buildExposed(reachFiles, otherFiles) : buildCelebrate(otherFiles));
+  scroll.appendChild(buildSettings());
+  main.appendChild(scroll);
+  stage.appendChild(main);
 
   // ---- Slim trust footer ----
   var a = DATA.access;
   stage.appendChild(el('div', { class: 'trust', html:
-    'Scanned <b>' + a.filesScanned + '</b> files · <b>read ' + a.contentsReadIntoContext + ' file contents into this conversation</b> · never looked above your project folder · every value masked.' }));
+    'Scanned <b>' + a.filesScanned + '</b> files · <b>read ' + a.contentsReadIntoContext + ' file contents into this conversation</b> · only your project and Claude\'s own settings were opened · every value masked.' }));
 
   // ---- Animations ----
   if (reduce) {
     arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
     document.getElementById('scoreNum').textContent = String(DATA.score);
-    settleMap();
+    revealBeam();
   } else {
     animateScore(arc, C);
-    animateMap();
-    // Safety net: rAF and CSS transitions are throttled when a tab is in the
-    // background, which would freeze the count-up and the reach mid-flight.
-    // Guarantee the resting state lands regardless, a beat after the sequence.
+    animateBeam();
+    // Safety net: rAF/CSS transitions are throttled in a background tab, which
+    // would freeze the count-up and leave the beam rows hidden. Force the resting
+    // state regardless, a beat after the intro.
     setTimeout(function () {
       arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
       document.getElementById('scoreNum').textContent = String(DATA.score);
-      settleMap();
-    }, 4200);
+      revealBeam();
+    }, 1600);
   }
 
   // =====================================================================
@@ -500,170 +573,129 @@ const SCRIPT = String.raw`
     requestAnimationFrame(step);
   }
 
-  function mapGeom() {
-    var W = 600, H = 560, cx = W / 2, cy = H / 2;
-    var files = DATA.exposureFiles || [];
-    var n = files.length || 1;
-    var ringR = Math.min(200, 130 + n * 12);
-    var nodes = files.map(function (f, i) {
-      var ang = (-Math.PI / 2) + (2 * Math.PI * i / n);
-      return { f: f, x: cx + ringR * Math.cos(ang), y: cy + ringR * Math.sin(ang) };
+  // The hero: what Claude can do here, as capability chips, explicitly tied to
+  // the settings section below (settings are the cause; reach is the effect).
+  function buildReachHero(reach) {
+    var caps = (DATA.reachSummary && DATA.reachSummary.length) ? DATA.reachSummary : ['open files in this project'];
+    var capEls = caps.map(function (c, i) {
+      return el('span', { class: 'cap' + (i === 0 ? '' : ' warn') }, [c]);
     });
-    return { W: W, H: H, cx: cx, cy: cy, ringR: ringR, nodes: nodes };
-  }
-
-  function buildMap() {
-    var g = mapGeom();
-    var s = svg('svg', { class: 'map', viewBox: '0 0 ' + g.W + ' ' + g.H, preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'A map of files Claude can reach. Files with sensitive contents that Claude can reach are shown in red.' });
-
-    // soft reach glow behind the apprentice — width nods to permissions breadth
-    var glowR = DATA.permGrade && /^[DF]/.test(DATA.permGrade) ? g.ringR + 64 : g.ringR + 24;
-    var glow = svg('circle', { cx: g.cx, cy: g.cy, r: glowR, fill: 'url(#reachGlow)', opacity: 0 });
-    glow.setAttribute('id', 'reachGlow-c');
-    var defs = svg('defs', {});
-    var rad = svg('radialGradient', { id: 'reachGlow' });
-    rad.appendChild(svg('stop', { offset: '0%', 'stop-color': 'rgba(232,181,75,0.20)' }));
-    rad.appendChild(svg('stop', { offset: '100%', 'stop-color': 'rgba(232,181,75,0)' }));
-    defs.appendChild(rad); s.appendChild(defs); s.appendChild(glow);
-
-    // safe bulk — muted dots scattered in a soft annulus, capped
-    var safe = Math.min(DATA.safeFileCount, 40), safeG = svg('g', { id: 'safeDots' });
-    for (var i = 0; i < safe; i++) {
-      var ang = (i / Math.max(safe, 1)) * 2 * Math.PI + 0.6, rr = g.ringR + 70 + (i % 5) * 9;
-      var d = svg('circle', { cx: g.cx + rr * Math.cos(ang), cy: g.cy + rr * Math.sin(ang) * 0.55, r: 2.4, fill: '#6fae8f', opacity: 0 });
-      safeG.appendChild(d);
-    }
-    s.appendChild(safeG);
-
-    // reach lines (apprentice -> reachable files) + file nodes
-    var lines = svg('g', { id: 'reachLines' }), nodesG = svg('g', { id: 'fileNodes' });
-    g.nodes.forEach(function (nd, i) {
-      var reach = nd.f.reachable;
-      if (reach) {
-        var ln = svg('line', { x1: g.cx, y1: g.cy, x2: nd.x, y2: nd.y, stroke: '#e2563f', 'stroke-width': 2, 'stroke-dasharray': 6, opacity: 0 });
-        ln.setAttribute('data-i', i); lines.appendChild(ln);
-      }
-      var color = reach ? '#e2563f' : '#8b86a6';
-      var grp = svg('g', { 'data-i': i, opacity: 0 }); grp.setAttribute('class', 'fnode');
-      grp.appendChild(svg('circle', { cx: nd.x, cy: nd.y, r: reach ? 13 : 9, fill: reach ? 'rgba(226,86,63,0.18)' : 'rgba(139,134,166,0.15)', stroke: color, 'stroke-width': 2 }));
-      if (nd.f.count > 1) {
-        var badge = svg('text', { x: nd.x, y: nd.y + 4, 'text-anchor': 'middle', 'font-size': 11, fill: color, 'font-weight': 'bold' });
-        badge.textContent = String(nd.f.count); grp.appendChild(badge);
-      }
-      var label = svg('text', { x: nd.x, y: nd.y + (nd.y > g.cy ? 30 : -22), 'text-anchor': 'middle', 'font-size': 13, fill: '#f4ecd8' });
-      label.textContent = baseName(nd.f.file); grp.appendChild(label);
-      if (reach) {
-        var tag = svg('text', { x: nd.x, y: nd.y + (nd.y > g.cy ? 46 : -38), 'text-anchor': 'middle', 'font-size': 10, fill: '#f08a76' });
-        tag.textContent = 'reachable'; grp.appendChild(tag);
-      }
-      nodesG.appendChild(grp);
-    });
-    s.appendChild(lines); s.appendChild(nodesG);
-
-    // the apprentice (center) — a small broom glyph in a gold disc
-    var app = svg('g', { id: 'apprentice' });
-    app.appendChild(svg('circle', { cx: g.cx, cy: g.cy, r: 24, fill: 'rgba(232,181,75,0.16)', stroke: '#e8b54b', 'stroke-width': 2 }));
-    var broom = svg('text', { x: g.cx, y: g.cy + 7, 'text-anchor': 'middle', 'font-size': 22 });
-    broom.textContent = '🧹'; app.appendChild(broom);
-    var cap = svg('text', { x: g.cx, y: g.cy + 44, 'text-anchor': 'middle', 'font-size': 12, fill: '#f0cd84' });
-    cap.textContent = 'Claude'; app.appendChild(cap);
-    // Empty state: nothing sensitive is in reach — say so plainly, warmly.
-    if (!(DATA.exposureFiles || []).length) {
-      var clear = svg('text', { x: g.cx, y: g.cy + 92, 'text-anchor': 'middle', 'font-size': 15, fill: '#6fae8f' });
-      clear.textContent = 'Nothing sensitive is in reach.'; app.appendChild(clear);
-    }
-    s.appendChild(app);
-
-    var legend = el('div', { class: 'legend' }, [
-      el('span', { html: '<i class="ap"></i>What Claude can reach' }),
-      el('span', { html: '<i class="dz"></i>Sensitive &amp; reachable' }),
-      el('span', { html: '<i class="sf"></i>Everything else (safe)' }),
+    var tie = reach.length
+      ? 'These powers come from your settings below — and they put the ' + reach.length + ' file' + (reach.length === 1 ? '' : 's') + ' below within reach.'
+      : 'These powers come from your settings below. Right now nothing sensitive sits within that reach.';
+    return el('div', { class: 'reachhero' }, [
+      el('span', { class: 'glyph' }, ['🧹']),
+      el('div', {}, [
+        el('div', { class: 'who' }, ['Claude can:']),
+        el('div', { class: 'caps' }, capEls),
+        el('div', { class: 'tie' }, [tie]),
+      ]),
     ]);
-    return el('div', { class: 'map-col' }, [el('div', { class: 'map-box' }, [s]), legend]);
   }
 
-  function settleMap() {
-    document.getElementById('reachGlow-c').setAttribute('opacity', '1');
-    each('#safeDots circle', function (d) { d.setAttribute('opacity', '0.5'); });
-    each('#reachLines line', function (l) { l.setAttribute('opacity', '0.9'); });
-    each('#fileNodes .fnode', function (g) { g.setAttribute('opacity', '1'); });
-  }
-
-  function animateMap() {
-    fade('#reachGlow-c', 1, 300);
-    each('#fileNodes .fnode', function (g, i) { setTimeout(function () { fadeEl(g, 1, 260); }, 250 + i * 90); });
-    each('#safeDots circle', function (d, i) { setTimeout(function () { fadeEl(d, 0.5, 400); }, 400 + i * 14); });
-    // the one meaningful motion: the reach reaches out and lands on each red file
-    var lines = document.querySelectorAll('#reachLines line');
-    Array.prototype.forEach.call(lines, function (ln, i) {
-      var len = lineLen(ln);
-      ln.style.strokeDasharray = len; ln.style.strokeDashoffset = len; ln.setAttribute('opacity', '0.9');
-      setTimeout(function () {
-        ln.style.transition = 'stroke-dashoffset .5s ease-out';
-        ln.style.strokeDashoffset = '0';
-        var i2 = ln.getAttribute('data-i');
-        setTimeout(function () { pulse(document.querySelector('#fileNodes .fnode[data-i="' + i2 + '"] circle')); }, 480);
-      }, 700 + i * 320);
-    });
-  }
-
-  function pulse(circle) {
-    if (!circle) return;
-    var r0 = +circle.getAttribute('r'), t0 = null;
-    function step(t) { if (t0 === null) t0 = t; var p = Math.min((t - t0) / 520, 1);
-      circle.setAttribute('r', String(r0 + Math.sin(p * Math.PI) * 6)); if (p < 1) requestAnimationFrame(step); else circle.setAttribute('r', String(r0)); }
-    requestAnimationFrame(step);
-  }
-
-  function buildFindings() {
-    var col = el('div', { class: 'find-col' });
-    var files = DATA.exposureFiles || [];
-    var reach = files.filter(function (f) { return f.reachable; });
-    var other = files.filter(function (f) { return !f.reachable; });
-    // Only files Claude can actually reach go under the reach heading; sensitive
-    // files it cannot reach (e.g. protected by a deny rule) are shown separately.
-    if (reach.length) col.appendChild(fileSection('Files Claude can reach', reach, true));
-    if (other.length) col.appendChild(fileSection('Other sensitive files (not reachable)', other, false));
-    var sf = DATA.settingsFindings || [];
-    if (sf.length) {
-      var items = sf.map(function (f) {
-        return el('div', { class: 'srow', html:
-          '<span class="sev s-' + escJs(f.severity) + '">' + escJs(f.severity) + '</span> ' + escJs(f.title) +
-          (f.file ? ' <span class="file">' + escJs(f.file) + '</span>' : '') });
-      });
-      col.appendChild(el('div', { class: 'section settingsec' }, [
-        el('h2', { html: 'Your settings <small>' + sf.length + '</small>' }),
-        el('div', { class: 'flist' }, items),
-      ]));
+  function buildExposed(reach, other) {
+    var list = el('div', {});
+    reach.forEach(function (f) { list.appendChild(beamRow(f, true)); });
+    if (other.length) {
+      list.appendChild(el('div', { class: 'tie', style: 'margin:9px 0 6px' }, ['Sensitive, but Claude can’t reach these:']));
+      other.forEach(function (f) { list.appendChild(beamRow(f, false)); });
     }
-    return col;
+    return el('div', { class: 'sect exposed' }, [
+      el('h2', { html: 'What’s exposed <small>' + reach.length + ' Claude can reach</small><span class="hint">tap a row for details</span>' }),
+      list,
+    ]);
   }
 
-  function fileSection(title, list, reachable) {
-    var rows = list.map(function (f) {
-      var sample = (f.marks.filter(function (m) { return m.redactedMatch; })[0] || {}).redactedMatch;
-      var bits = [
-        el('span', { class: 'dot' }),
-        el('span', { class: 'fn' }, [baseName(f.file)]),
-        el('span', { class: 'meta' }, [' · ' + f.count + (f.count === 1 ? ' item' : ' items') + ' · ' + (f.severity || 'info')]),
-      ];
-      if (DATA.baselineActive && f.isNew) bits.push(el('span', { class: 'newt' }, ['new']));
-      if (reachable) bits.push(el('span', { class: 'reach' }, ['reachable']));
-      if (sample) bits.push(el('code', {}, [sample]));
-      return el('div', { class: 'frow' + (reachable ? '' : ' safe'), title: f.file }, bits);
+  function buildCelebrate(other) {
+    var hasOther = !!(other && other.length);
+    var banner = el('div', { class: 'celebrate' + (hasOther ? ' compact' : '') }, [
+      el('div', { class: 'check' }, ['✓']),
+      el('div', { class: 'big' }, ['Nothing sensitive is in reach']),
+      el('div', { class: 'sub' }, [hasOther
+        ? 'Claude can’t get to anything risky here — the sensitive files below are all out of its reach.'
+        : 'Claude can’t get to anything risky in this project — you’re in good shape. The settings below are just notes.']),
+    ]);
+    // Even with nothing reachable, still list any sensitive-but-protected files so
+    // the user can see — and verify — exactly what their deny rules are guarding.
+    if (!hasOther) return banner;
+    var list = el('div', {});
+    other.forEach(function (f) { list.appendChild(beamRow(f, false)); });
+    return el('div', { class: 'sect exposed' }, [
+      banner,
+      el('h2', { html: 'Sensitive, but out of reach <small>' + other.length + ' protected</small><span class="hint">tap a row for details</span>' }),
+      list,
+    ]);
+  }
+
+  function beamRow(f, reachable) {
+    var bits = [
+      el('span', { class: 'arrow' }, [reachable ? 'can open →' : 'can’t reach']),
+      el('span', { class: 'fn' }, [baseName(f.file)]),
+      el('span', { class: 'meta' }, [' · ' + f.count + (f.count === 1 ? ' item' : ' items') + ' · ' + (f.severity || 'info')]),
+    ];
+    if (DATA.baselineActive && f.isNew) bits.push(el('span', { class: 'tag newt' }, ['new']));
+    bits.push(el('span', { class: 'chev' }, ['▸']));
+    var head = el('div', { class: 'bhead' }, bits);
+
+    var detail = el('div', { class: 'detail' });
+    var sm = (f.marks || []).filter(function (m) { return m.redactedMatch; });
+    if (sm.length) {
+      detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">found</span>' + sm.map(function (m) {
+        return (m.line ? '<span class="loc">line ' + escJs(m.line) + '</span> ' : '') + '<code>' + escJs(m.redactedMatch) + '</code>';
+      }).join('  ') }));
+    }
+    if (f.why) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">why</span>' + escJs(f.why) }));
+    if (f.fix) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">fix</span>' + escJs(f.fix) }));
+    detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">where</span><span class="loc">' + escJs(f.file) + '</span>' }));
+
+    var row = el('div', { class: 'brow' + (reachable ? '' : ' safe') }, [head, detail]);
+    head.addEventListener('click', function () { row.classList.toggle('open'); });
+    return row;
+  }
+
+  function revealBeam() { each('.brow', function (r) { r.style.opacity = '1'; r.style.transform = 'none'; }); }
+  function animateBeam() {
+    each('.brow', function (r, i) {
+      r.style.opacity = '0'; r.style.transform = 'translateX(-8px)';
+      r.style.transition = 'opacity .35s ease, transform .35s ease';
+      setTimeout(function () { r.style.opacity = '1'; r.style.transform = 'none'; }, 250 + i * 110);
     });
-    return el('div', { class: 'section reachsec' }, [
-      el('h2', { html: escJs(title) + ' <small>' + list.length + '</small>' }),
-      el('div', {}, rows),
+  }
+
+  // Settings findings as an accordion — the cause of the reach above. Collapsed
+  // stays dense; each expands to why, how it was detected, the fix, and where.
+  function buildSettings() {
+    var sf = DATA.settingsFindings || [];
+    var list = el('div', { class: 'plist' });
+    sf.forEach(function (f) {
+      var bits = [
+        el('span', { class: 'sev s-' + escJs(f.severity || 'info') }, [f.severity || 'info']),
+        el('span', { class: 'stitle' }, [f.title || '']),
+      ];
+      if (f.file) bits.push(el('span', { class: 'file' }, [f.file]));
+      bits.push(el('span', { class: 'chev' }, ['▸']));
+      var head = el('div', { class: 'shead' }, bits);
+
+      var detail = el('div', { class: 'detail' });
+      if (f.why) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">why</span>' + escJs(f.why) }));
+      if (f.evidence) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">how we know</span>' + escJs(f.evidence) }));
+      if (f.fix) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">fix</span>' + escJs(f.fix) }));
+      if (f.file) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">where</span><span class="loc">' + escJs(f.file) + (f.line ? ':' + escJs(f.line) : '') + '</span>' }));
+      if (!f.why && !f.evidence && !f.fix) detail.appendChild(el('div', { class: 'drow loc' }, ['No extra detail for this one.']));
+
+      var row = el('div', { class: 'srow' }, [head, detail]);
+      head.addEventListener('click', function () { row.classList.toggle('open'); });
+      list.appendChild(row);
+    });
+    return el('div', { class: 'sect settings' }, [
+      el('h2', { html: 'The settings behind this <small>' + sf.length + '</small><span class="hint">tap a row for details</span>' }),
+      list,
     ]);
   }
 
   // helpers
   function baseName(p) { var s = String(p).split(/[\\\/]/); return s[s.length - 1]; }
   function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
-  function fade(sel, to, ms) { var n = document.querySelector(sel); if (n) fadeEl(n, to, ms); }
-  function fadeEl(n, to, ms) { n.style.transition = 'opacity ' + ms + 'ms ease'; n.setAttribute('opacity', String(to)); }
-  function lineLen(ln) { var dx = ln.x2.baseVal.value - ln.x1.baseVal.value, dy = ln.y2.baseVal.value - ln.y1.baseVal.value; return Math.sqrt(dx*dx+dy*dy); }
   function escJs(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 })();
 `;
@@ -699,9 +731,11 @@ function main() {
     fs.writeFileSync(args.out, html, 'utf8');
     process.stderr.write(`fantasia-visual: wrote ${args.out}\n`);
   } else {
+    // Write to stdout and let the process exit naturally once the buffer drains.
+    // Calling process.exit(0) here would truncate a piped/redirected report on
+    // Windows, where stdout is async and may not have flushed yet.
     process.stdout.write(html);
   }
-  process.exit(0);
 }
 
 main();

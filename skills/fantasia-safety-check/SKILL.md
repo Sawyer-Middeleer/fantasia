@@ -577,17 +577,40 @@ Then ask with the **AskUserQuestion** tool (header `Save report`):
 
 ### 6a. The visual page (`FANTASIA-REPORT.html`)
 
-Generate it straight from the scanner — pipe the same scan you ran in Step 2 into
-the bundled renderer:
+Render the page from the **same assessment as the written summary** — it must
+include the `[judgment]` findings you added in Step 2.5 and the leverage grade you
+recomputed in 2.5c, not the scanner's placeholder `A`. So unless you added no
+judgment at all, render from an augmented copy of the scan rather than the raw pipe:
+
+1. Capture the Step 2 scan to a file (add `--baseline "$PWD/.fantasia/baseline.json"`
+   if a baseline exists, exactly as in Step 2):
+
+```bash
+mkdir -p "$PWD/.fantasia"
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json > "$PWD/.fantasia/report-input.json"
+```
+
+2. Edit `report-input.json`: append each Step 2.5 `[judgment]` finding to the
+   `findings` array (same shape as a scanner finding: `dimension`, `severity`,
+   `id`, `title`, `why`, `evidence`, `fix`), and set `summary.grades.leverage` to
+   the grade you recomputed in 2.5c. Change nothing else — and never add or unmask
+   a secret value.
+
+3. Render the augmented file:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-visual" "$PWD/.fantasia/report-input.json" --out "$PWD/FANTASIA-REPORT.html"
+```
+
+If you added no judgment findings and left the leverage grade untouched, skip the
+file and pipe the scan straight in:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
   | node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-visual" --out "$PWD/FANTASIA-REPORT.html"
 ```
 
-If a baseline exists, add `--baseline "$PWD/.fantasia/baseline.json"` to the
-**scan** side, exactly as in Step 2 (the page then leads with what's new). Use the
-dev-fallback `node bin/...` form if `${CLAUDE_PLUGIN_ROOT}` is unset.
+Use the dev-fallback `node bin/...` form if `${CLAUDE_PLUGIN_ROOT}` is unset.
 
 The renderer consumes ONLY the scanner's already-redacted JSON and HTML-escapes
 every value, so the page can never contain a raw secret — the same guarantee as
