@@ -10,7 +10,7 @@
 **A quick checkup for your Claude Code setup.** fantasia finds exposed
 secrets, sensitive files, and loose permission settings — explains every finding in plain English — and helps you fix them before Claude ever sees.
 
-![A Fantasia Safety Check report — what Claude can reach, what's exposed, and the settings behind it, with every secret value masked.](docs/report-example.png)
+![A Fantasia Safety Check report — what Claude can reach, what's exposed, and the settings behind it, with every secret value masked.](docs/example-report.png)
 
 > A Safety Check report: what Claude can reach, what's exposed inside that reach, and the settings behind it — every secret masked.
 
