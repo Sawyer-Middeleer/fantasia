@@ -16,7 +16,7 @@ secrets, sensitive files, and loose permission settings — explains every findi
 
 Fantasia provides 3 workflows to Claude Code users:
 
-- **Safety Check** (`/fantasia-safety-check`) — a private, local scan that scores your setup, shows what's exposed and reachable, explains *how it knows*, and fixes issues.
+- **Safety Check** (`/fantasia-safety-check`) — a private, local scan that scores your setup, shows what's exposed and reachable, explains *how it knows*, and fixes issues. Save the result as a self-contained **visual report** (`FANTASIA-REPORT.html`) you open in a browser, a written summary, or both.
 - **Safety Setup** (`/fantasia-safety-setup`) — a plain‑English interview that generates a safe starting config to keep your data protected as you work.
 - **Ask** (`/fantasia-ask`) — a simple guide to Claude Code data and privacy settings in plain English, personalized to your setup.
 

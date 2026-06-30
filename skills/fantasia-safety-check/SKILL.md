@@ -24,7 +24,7 @@ so re-runs only surface what's new.
 **The flow, end to end:** disclose & consent (Step 1) → run the scanner (Step 2) →
 add the judgment findings the scanner can't (Step 2.5) → render the report
 (Step 3) → fix loop (Step 4) → dismiss / baseline for clean re-runs (Step 5) →
-write `FANTASIA-REPORT.md` (Step 6).
+save the checkup as a visual page and/or written summary (Step 6).
 
 The detail lives in the shared reference files — consult them as you go:
 
@@ -552,19 +552,80 @@ they want to fix, accepting the remainder is a clean stopping point.
 
 ---
 
-## Step 6 — Write `FANTASIA-REPORT.md`
+## Step 6 — Save the checkup (a visual page, a written summary, or both)
 
-At the end of an audit, offer to write a saved report to the project root. This
-**creates a new file**, so disclose first (the disclose-before-acting rule) with a
-one-line heads-up, then write only on a yes:
+At the end of an audit, offer to save a copy to the project root. There are two
+formats, and the user can take either or both:
 
-> "I can drop a plain-English copy of this checkup in `FANTASIA-REPORT.md` at your
-> project root — something you can keep or share. No secret values, just the
-> redacted findings."
+- **A visual page** (`FANTASIA-REPORT.html`) — a single self-contained page they
+  open in a browser: a warm map of what Claude can actually reach, the score, the
+  five grades, and the findings. Best for seeing the picture at a glance, and the
+  easiest thing to share or keep.
+- **A written summary** (`FANTASIA-REPORT.md`) — the same checkup in plain English.
+  Best for skimming in an editor or pasting into notes.
 
-Then ask with the **AskUserQuestion** tool (header `Save report`): **Save the
-report** · **No thanks**. On **No thanks**, skip it. On **Save the report**, use
-**Write** to create `$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md`
+Both **create a new file**, so disclose first (the disclose-before-acting rule)
+with a one-line heads-up, then write only on a yes:
+
+> "I can save a copy of this checkup at your project root — either a visual page
+> you open in your browser, a plain-English written summary, or both. No secret
+> values either way; just the masked findings."
+
+Then ask with the **AskUserQuestion** tool (header `Save report`):
+**A visual page** · **A written summary** · **Both** · **No thanks**. On
+**No thanks**, skip it. Otherwise produce the chosen format(s) as below.
+
+### 6a. The visual page (`FANTASIA-REPORT.html`)
+
+Render the page from the **same assessment as the written summary** — it must
+include the `[judgment]` findings you added in Step 2.5 and the leverage grade you
+recomputed in 2.5c, not the scanner's placeholder `A`. So unless you added no
+judgment at all, render from an augmented copy of the scan rather than the raw pipe:
+
+1. Capture the Step 2 scan to a file (add `--baseline "$PWD/.fantasia/baseline.json"`
+   if a baseline exists, exactly as in Step 2):
+
+```bash
+mkdir -p "$PWD/.fantasia"
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json > "$PWD/.fantasia/report-input.json"
+```
+
+2. Edit `report-input.json`: append each Step 2.5 `[judgment]` finding to the
+   `findings` array (same shape as a scanner finding: `dimension`, `severity`,
+   `id`, `title`, `why`, `evidence`, `fix`), and set `summary.grades.leverage` to
+   the grade you recomputed in 2.5c. Change nothing else — and never add or unmask
+   a secret value.
+
+3. Render the augmented file:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-visual" "$PWD/.fantasia/report-input.json" --out "$PWD/FANTASIA-REPORT.html"
+```
+
+If you added no judgment findings and left the leverage grade untouched, skip the
+file and pipe the scan straight in:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-scan" "$PWD" --json \
+  | node "${CLAUDE_PLUGIN_ROOT}/bin/fantasia-visual" --out "$PWD/FANTASIA-REPORT.html"
+```
+
+Use the dev-fallback `node bin/...` form if `${CLAUDE_PLUGIN_ROOT}` is unset.
+
+The renderer consumes ONLY the scanner's already-redacted JSON and HTML-escapes
+every value, so the page can never contain a raw secret — the same guarantee as
+the written report, enforced mechanically rather than by careful wording. You do
+not assemble this file by hand; the renderer writes it.
+
+Then point them to it. The safest, terminal-free line for a non-technical reader
+is: *"It's saved as `FANTASIA-REPORT.html` in your project folder — double-click
+it to open."* If they'd rather you open it for them, use the platform opener
+(`start "" FANTASIA-REPORT.html` on Windows, `open FANTASIA-REPORT.html` on macOS,
+`xdg-open FANTASIA-REPORT.html` on Linux). Confirm the path in one line.
+
+### 6b. The written summary (`FANTASIA-REPORT.md`)
+
+Use **Write** to create `$PWD/FANTASIA-REPORT.md` (or `<scanRoot>/FANTASIA-REPORT.md`
 if a path argument was given) using the template below.
 
 **Hard rules still apply to the file:** never write a real secret value — only

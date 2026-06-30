@@ -1,0 +1,741 @@
+#!/usr/bin/env node
+/*
+ * fantasia-visual — render a scan's redacted JSON into a single self-contained
+ * HTML page: a warm, legible "reachability map" of your project's safety health.
+ *
+ * Zero external dependencies (Node built-ins only). Cross-platform.
+ *
+ * It reads ONLY the redacted JSON that `fantasia-scan --json` produces — never a
+ * project file. A raw secret value never enters here; the scan already redacted
+ * everything (we only ever show `redactedMatch`, e.g. AKIA••••).
+ *
+ * Usage:
+ *   node bin/fantasia-scan <path> --json | node bin/fantasia-visual --out report.html
+ *   node bin/fantasia-visual scan.json --out report.html
+ *   node bin/fantasia-visual scan.json            # HTML to stdout
+ *
+ * Design (v1): credibility-first, charm as accent. The center of gravity is the
+ * reachability picture — what sensitive thing Claude can actually reach — framed
+ * by the score, the five grades, and the "read 0 file contents" trust proof.
+ */
+
+'use strict';
+
+const fs = require('fs');
+
+// ---------------------------------------------------------------------------
+// Arg parsing
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const args = { input: null, out: null, title: null };
+  // Consume the value after a flag, erroring if it's missing or is itself a flag
+  // (otherwise `--out` with no path would silently fall through to stdout).
+  const value = (i, flag) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith('--')) {
+      process.stderr.write(`fantasia-visual: ${flag} requires a value.\n`);
+      process.exit(1);
+    }
+    return v;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--out') args.out = value(++i, '--out');
+    else if (a.startsWith('--out=')) args.out = a.slice('--out='.length);
+    else if (a === '--title') args.title = value(++i, '--title');
+    else if (a.startsWith('--title=')) args.title = a.slice('--title='.length);
+    else if (a.startsWith('--')) { /* ignore unknown flags */ }
+    else if (args.input === null) args.input = a;
+  }
+  return args;
+}
+
+function readInput(inputPath) {
+  // From a file arg, or stdin (fd 0) when piped.
+  if (inputPath) return fs.readFileSync(inputPath, 'utf8');
+  return fs.readFileSync(0, 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// HTML escaping — every dynamic string passes through this before it lands in
+// the document, so a redacted match or filename can never break out into markup.
+// ---------------------------------------------------------------------------
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ---------------------------------------------------------------------------
+// Severity / grade helpers
+// ---------------------------------------------------------------------------
+
+const SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+
+function worseSeverity(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return (SEVERITY_RANK[a] || 0) >= (SEVERITY_RANK[b] || 0) ? a : b;
+}
+
+// ---------------------------------------------------------------------------
+// Model — shape the raw scan JSON into exactly what the page draws.
+//
+// The map's nodes are FILES that hold something sensitive (the `exposure`
+// dimension). A file node is "reachable" when any finding on it is reachable.
+// Settings-level findings (permissions / privacy / context) are not files on the
+// map — they describe HOW MUCH reach Claude has, and frame the picture instead.
+// ---------------------------------------------------------------------------
+
+function buildModel(scan, titleOverride) {
+  const summary = scan.summary || {};
+  const access = scan.access || {};
+  const all = Array.isArray(scan.findings) ? scan.findings : [];
+
+  // Dismissed findings never appear — the scanner already excluded them from
+  // the score; we keep them out of the picture too.
+  const findings = all.filter((f) => !f.ignored);
+
+  const baselineActive = summary.newCount != null;
+
+  // --- Exposure files (the map nodes) ---------------------------------------
+  // Group exposure findings by file, deduping the secret/sensitive item by line
+  // so a single .env with five keys is one node with five marks, not five nodes.
+  const fileMap = new Map();
+  for (const f of findings) {
+    if (f.dimension !== 'exposure' || !f.file) continue;
+    let node = fileMap.get(f.file);
+    if (!node) {
+      node = {
+        file: f.file,
+        reachable: false,
+        severity: null,
+        isNew: false,
+        why: '', fix: '',
+        marks: new Map(), // key: line or `_<id>` -> { line, redactedMatch }
+      };
+      fileMap.set(f.file, node);
+    }
+    if (f.reachable === true) node.reachable = true;
+    if (f.isNew === true) node.isNew = true;
+    node.severity = worseSeverity(node.severity, f.severity);
+    // `reachable-secret` is a correlation marker for an underlying secret/sensitive
+    // finding on the same file — it flips reachability but is not its own item.
+    if (f.id === 'reachable-secret') continue;
+    if (!node.why && f.why) node.why = f.why;
+    if (!node.fix && f.fix) node.fix = f.fix;
+    // Dedup a secret by line; file-level (line-null) findings stay distinct by id
+    // so two different categories on one file aren't collapsed into one.
+    const key = f.line == null ? '_' + f.id : String(f.line);
+    const existing = node.marks.get(key);
+    // Prefer a mark that carries a redactedMatch (the raw secret finding) over a
+    // bare correlation marker for the same line.
+    if (!existing || (!existing.redactedMatch && f.redactedMatch)) {
+      node.marks.set(key, { line: f.line, redactedMatch: f.redactedMatch || (existing && existing.redactedMatch) || null });
+    }
+  }
+
+  const exposureFiles = Array.from(fileMap.values())
+    .map((n) => ({
+      file: n.file,
+      reachable: n.reachable,
+      severity: n.severity,
+      isNew: n.isNew,
+      why: n.why, fix: n.fix,
+      count: n.marks.size,
+      marks: Array.from(n.marks.values()).sort((a, b) => (a.line || 0) - (b.line || 0)),
+    }))
+    // Reachable first; in baseline mode, new before reviewed; then severity, then count.
+    .sort((a, b) => {
+      if (a.reachable !== b.reachable) return a.reachable ? -1 : 1;
+      if (baselineActive && a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+      const s = (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
+      if (s !== 0) return s;
+      return b.count - a.count;
+    });
+
+  const reachableCount = exposureFiles.filter((n) => n.reachable).length;
+
+  // --- Reach posture (drives glow width/brightness, subtly) -----------------
+  // Permissions grade is the honest proxy for how wide Claude's reach is.
+  const grades = summary.grades || {};
+  const permGrade = grades.permissions || null;
+
+  // --- Settings findings (framing, not map nodes) ---------------------------
+  const settingsFindings = findings
+    .filter((f) => f.dimension !== 'exposure')
+    .sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
+
+  // What Claude can reach, in plain phrases, grounded in the findings actually
+  // present — this is the honest descriptor under the "Claude" node in the beam.
+  const reachSummary = buildReachSummary(settingsFindings);
+
+  // --- Headline: one plain sentence, derived from what was actually found ----
+  const headline = buildHeadline({
+    score: summary.score,
+    reachableCount,
+    counts: summary.counts || {},
+    baselineActive,
+    newCount: summary.newCount,
+  });
+
+  // Coerce every number that lands in the page to an integer. The scanner always
+  // emits integers here, but this renderer also accepts an arbitrary JSON file, so
+  // a non-numeric value must never survive into an `innerHTML` string downstream.
+  const counts = {
+    critical: toInt((summary.counts || {}).critical),
+    high: toInt((summary.counts || {}).high),
+    medium: toInt((summary.counts || {}).medium),
+    low: toInt((summary.counts || {}).low),
+  };
+
+  return {
+    title: titleOverride || projectName(scan.scannedRoot),
+    score: typeof summary.score === 'number' ? summary.score : 0,
+    grades,
+    permGrade,
+    counts,
+    baselineActive,
+    newCount: summary.newCount,
+    headline,
+    access: {
+      filesScanned: toInt(access.filesScanned),
+      contentsReadIntoContext: toInt(access.contentsReadIntoContext),
+    },
+    exposureFiles,
+    settingsFindings,
+    reachSummary,
+  };
+}
+
+// Plain-English phrases for what Claude can currently do, derived from which
+// permission/privacy findings are present. "Open files here" is always true for
+// a project agent; the rest are added only when the matching finding exists.
+function buildReachSummary(settingsFindings) {
+  const ids = new Set(settingsFindings.map((f) => f.id));
+  const has = (list) => list.some((id) => ids.has(id));
+  const out = ['open files in this project'];
+  if (has(['bash-wide-open', 'network-bash-allowed', 'env-runner-allowed', 'mode-bypass-permissions', 'mode-auto'])) {
+    out.push('run shell commands');
+  }
+  if (has(['mcp-wide-open', 'mcp-write-capable'])) out.push('use connected tools');
+  if (has(['webfetch-all-domains', 'webfetch-preflight-off'])) out.push('reach the web');
+  return out;
+}
+
+// Coerce to a non-negative integer; anything non-numeric (including injected
+// markup like "<img onerror=…>") collapses to 0.
+function toInt(v) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function projectName(root) {
+  if (!root) return 'your project';
+  const parts = String(root).split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : 'your project';
+}
+
+function buildHeadline({ score, reachableCount, counts, baselineActive, newCount }) {
+  if (baselineActive && newCount === 0) {
+    return 'Nothing new since your last checkup — you’re holding steady.';
+  }
+  if (baselineActive && newCount > 0) {
+    return 'Since your last checkup, ' + newCount + (newCount === 1 ? ' new thing needs' : ' new things need') + ' a look.';
+  }
+  if (reachableCount > 0) {
+    const noun = reachableCount === 1 ? 'one sensitive file' : `${reachableCount} sensitive files`;
+    return `Start here: ${noun} Claude can actually reach. Then a few cleanups.`;
+  }
+  if ((counts.critical || 0) + (counts.high || 0) > 0) {
+    return 'A couple of things worth tightening — nothing reachable is exposed.';
+  }
+  if (score >= 85) return 'Your setup’s in good shape — just a couple of small notes.';
+  return 'A few things worth knowing, none of them urgent.';
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+function renderHtml(model) {
+  // The page draws itself from this single embedded blob — no network, no deps.
+  const data = JSON.stringify({
+    title: model.title,
+    score: model.score,
+    grades: model.grades,
+    permGrade: model.permGrade,
+    counts: model.counts,
+    headline: model.headline,
+    access: model.access,
+    baselineActive: model.baselineActive,
+    newCount: model.newCount,
+    exposureFiles: model.exposureFiles,
+    reachSummary: model.reachSummary,
+    settingsFindings: model.settingsFindings.map((f) => ({
+      title: f.title, severity: f.severity, file: f.file, line: f.line,
+      why: f.why, evidence: f.evidence, fix: f.fix,
+    })),
+  })
+    // Guard the closing-tag sequence so the JSON can't break out of <script>.
+    .replace(/</g, '\\u003c');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasia — ${esc(model.title)}</title>
+<style>${STYLE}</style>
+</head>
+<body>
+<main id="stage" aria-live="polite">
+  <noscript><p class="noscript">This report needs JavaScript to render. For a no-JavaScript version, re-run the safety check and choose the written summary.</p></noscript>
+</main>
+<script>
+const DATA = JSON.parse("${jsString(data)}");
+${SCRIPT}
+</script>
+</body>
+</html>
+`;
+}
+
+// Encode a JSON string for safe embedding inside a double-quoted JS string.
+function jsString(s) {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+// ---------------------------------------------------------------------------
+// STYLE — warm "apprentice's workshop at night" palette over an honest diagram.
+// Charm as accent (a star motif, a broom glyph), not as the structure.
+// ---------------------------------------------------------------------------
+
+const STYLE = `
+:root {
+  --ink: #1a1730;
+  --night: #100d22;
+  --night-2: #1b1740;
+  --parchment: #f4ecd8;
+  --parchment-2: #e9dcbf;
+  --gold: #e8b54b;
+  --gold-soft: #f0cd84;
+  --danger: #e2563f;
+  --danger-soft: #f08a76;
+  --safe: #6fae8f;
+  --muted: #8b86a6;
+  --line: rgba(255,255,255,0.10);
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font);
+  color: var(--parchment);
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #241d52 0%, transparent 60%),
+    linear-gradient(180deg, var(--night-2) 0%, var(--night) 100%);
+  height: 100vh;
+  overflow: hidden;            /* the whole checkup fits one screen — no scroll */
+  padding: 16px 20px;
+}
+#stage { width: 100%; max-width: 1240px; margin: 0 auto; height: 100%; display: flex; flex-direction: column; gap: 12px; }
+.noscript { color: var(--parchment); }
+
+/* Top band — identity + headline (left), score + grades + counts (right) */
+.band { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex: none; }
+.band-l { min-width: 0; }
+.kicker { letter-spacing: 0.24em; text-transform: uppercase; font-size: 11px; color: var(--gold); opacity: 0.85; }
+.kicker .star { color: var(--gold-soft); }
+.project { font-family: var(--serif); font-size: 25px; margin: 1px 0; line-height: 1.1; }
+.headline { font-size: 15px; color: var(--parchment-2); margin: 0; line-height: 1.35; max-width: 560px; }
+.band-r { display: flex; align-items: center; gap: 16px; flex: none; }
+
+/* Score ring */
+.scorering { position: relative; width: 92px; height: 92px; flex: none; }
+.scorering svg { transform: rotate(-90deg); }
+.scorenum { position: absolute; inset: 0; display: grid; place-items: center; }
+.scorenum b { font-size: 28px; font-family: var(--serif); line-height: 1; }
+.scorenum span { font-size: 10px; color: var(--muted); }
+
+/* Grades + counts */
+.gradecol { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+.grades { display: flex; gap: 6px; }
+.grade { display: flex; flex-direction: column; align-items: center; gap: 1px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 9px; min-width: 50px; }
+.grade .g { font-family: var(--serif); font-size: 18px; line-height: 1; }
+.grade .lbl { font-size: 8.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.grade.gA .g { color: var(--safe); } .grade.gB .g { color: var(--gold-soft); }
+.grade.gC .g { color: var(--gold); } .grade.gD .g { color: var(--danger-soft); }
+.grade.gF .g { color: var(--danger); }
+.counts { font-size: 11px; color: var(--muted); }
+.counts b { color: var(--parchment-2); font-weight: 600; }
+.counts .crit { color: var(--danger-soft); }
+.gnote { font-size: 9px; color: var(--muted); }
+
+/* One unified view — top-down hierarchy: powers → exposure → the settings behind it */
+.main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+
+/* Reach hero — what Claude can do, explicitly tied to the settings below */
+.reachhero { flex: none; display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.reachhero .glyph { font-size: 26px; line-height: 1; flex: none; }
+.reachhero .who { font-family: var(--serif); font-size: 16px; color: var(--gold-soft); margin-bottom: 5px; }
+.caps { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.cap { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; background: rgba(255,255,255,0.05);
+  border: 1px solid var(--line); color: var(--parchment-2); }
+.cap.warn { background: rgba(226,86,63,0.12); border-color: rgba(226,86,63,0.40); color: var(--danger-soft); }
+.reachhero .tie { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* Everything below the pinned hero scrolls together when it can't fit one
+   viewport — so a project with many findings never clips its own content. */
+.scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+
+/* Stacked sections */
+.sect { display: flex; flex-direction: column; flex: none; }
+.sect h2 { font-family: var(--serif); font-size: 14px; margin: 0 0 7px; color: var(--parchment); }
+.sect h2 small { font-family: var(--font); font-size: 11px; color: var(--muted); font-weight: 400; }
+
+/* Celebration — clean state */
+.celebrate { min-height: 300px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; gap: 10px; padding: 16px; }
+.celebrate .check { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(111,174,143,0.15); border: 2px solid var(--safe); color: var(--safe); font-size: 46px; line-height: 1; }
+.celebrate .big { font-family: var(--serif); font-size: 23px; color: var(--safe); }
+.celebrate .sub { font-size: 13px; color: var(--parchment-2); max-width: 440px; line-height: 1.45; }
+/* Compact banner when sensitive-but-protected files are listed below it */
+.celebrate.compact { min-height: 0; padding: 6px 16px 14px; gap: 7px; }
+.celebrate.compact .check { width: 54px; height: 54px; font-size: 30px; border-width: 2px; }
+.celebrate.compact .big { font-size: 18px; }
+
+/* Beam rows (Claude → file) — accordion */
+.brow { border: 1px solid rgba(226,86,63,0.32); background: rgba(226,86,63,0.08); border-radius: 9px; margin-bottom: 6px; }
+.brow.safe { border-color: var(--line); background: rgba(255,255,255,0.03); }
+.bhead, .shead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.bhead { padding: 7px 10px; font-size: 12px; border-radius: 8px; }
+.bhead .arrow { color: var(--danger-soft); font-size: 11px; flex: none; }
+.brow.safe .arrow { color: var(--muted); }
+.bhead .fn { font-family: var(--serif); font-size: 13px; color: var(--parchment); }
+.bhead .meta { color: var(--muted); }
+.tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+.tag.reach { color: var(--danger-soft); }
+.tag.newt { color: var(--gold); }
+.chev { margin-left: auto; color: var(--gold-soft); font-size: 15px; line-height: 1; transition: transform .15s, opacity .15s; flex: none; opacity: 0.7; }
+.open > .bhead .chev, .open > .shead .chev { transform: rotate(90deg); opacity: 1; }
+.bhead:hover, .shead:hover { background: rgba(232,181,75,0.10); }
+.bhead:hover .chev, .shead:hover .chev { opacity: 1; }
+.hint { font-family: var(--font); font-size: 10px; color: var(--muted); font-weight: 400; margin-left: 8px; letter-spacing: 0.02em; }
+
+/* Detail panes (shared) */
+.detail { display: none; font-size: 11.5px; color: var(--parchment-2); line-height: 1.5; }
+.open > .detail { display: block; }
+.brow .detail { padding: 0 10px 9px 27px; }
+.detail .drow { margin-top: 5px; }
+.detail .lbl { color: var(--gold-soft); text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; margin-right: 6px; }
+.detail code { background: rgba(0,0,0,0.3); padding: 0 5px; border-radius: 5px; font-size: 11px; }
+.detail .loc { color: var(--muted); }
+
+/* Settings accordion rows */
+.srow { border-bottom: 1px solid var(--line); }
+.srow:last-child { border-bottom: none; }
+.shead { padding: 6px 2px; font-size: 12px; }
+.shead .sev { flex: none; min-width: 52px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; align-self: center; }
+.sev.s-critical, .sev.s-high { color: var(--danger-soft); }
+.sev.s-medium { color: var(--gold-soft); }
+.sev.s-low, .sev.s-info { color: var(--muted); }
+.shead .stitle { color: var(--parchment); }
+.shead .file { color: var(--muted); font-size: 10.5px; }
+.srow .detail { padding: 2px 2px 8px 56px; }
+
+/* Slim trust footer */
+.trust { flex: none; text-align: center; font-size: 12px; color: var(--parchment-2);
+  background: rgba(111,174,143,0.08); border: 1px solid rgba(111,174,143,0.22); border-radius: 10px; padding: 7px 12px; }
+.trust b { color: var(--safe); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+`;
+
+// ---------------------------------------------------------------------------
+// SCRIPT — builds the DOM from DATA and runs the one meaningful motion:
+// the "reach" extending from the apprentice and landing on each reachable file.
+// ---------------------------------------------------------------------------
+
+const SCRIPT = String.raw`
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var stage = document.getElementById('stage');
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    if (attrs) for (var k in attrs) { if (k === 'class') n.className = attrs[k]; else if (k === 'html') n.innerHTML = attrs[k]; else n.setAttribute(k, attrs[k]); }
+    (kids || []).forEach(function (c) { n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS(SVGNS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); return n; }
+  function gradeClass(g) { return 'grade g' + (g || '').charAt(0).toUpperCase(); }
+
+  // ---- Top band: identity (left) + score / grades / counts (right) ----
+  var bandL = el('div', { class: 'band-l' }, [
+    el('div', { class: 'kicker', html: '<span class="star">✦</span> Fantasia safety check' }),
+    el('div', { class: 'project' }, [DATA.title]),
+    el('p', { class: 'headline' }, [DATA.headline]),
+  ]);
+
+  var R = 42, C = 2 * Math.PI * R;
+  var ring = svg('svg', { width: 92, height: 92, viewBox: '0 0 92 92' });
+  ring.appendChild(svg('circle', { cx: 46, cy: 46, r: R, fill: 'none', stroke: 'rgba(255,255,255,0.10)', 'stroke-width': 8 }));
+  var arc = svg('circle', { cx: 46, cy: 46, r: R, fill: 'none', stroke: scoreColor(DATA.score), 'stroke-width': 8, 'stroke-linecap': 'round', 'stroke-dasharray': C, 'stroke-dashoffset': C });
+  ring.appendChild(arc);
+  var ringWrap = el('div', { class: 'scorering' }, [ring, el('div', { class: 'scorenum' }, [el('b', { id: 'scoreNum' }, ['0']), el('span', {}, ['/ 100'])])]);
+
+  var GLABELS = [['exposure','Expo'],['permissions','Perms'],['privacy','Privacy'],['context','Context'],['leverage','Lev']];
+  var grades = el('div', { class: 'grades' }, GLABELS.map(function (p) {
+    var g = (DATA.grades && DATA.grades[p[0]]) || '–';
+    var chip = el('div', { class: gradeClass(g) }, [el('span', { class: 'g' }, [g]), el('span', { class: 'lbl' }, [p[1]])]);
+    if (p[0] === 'leverage') chip.setAttribute('title', 'Leverage is assessed separately, not by the scanner.');
+    return chip;
+  }));
+  var cc = DATA.counts || {};
+  var cb = [];
+  if (cc.critical) cb.push('<span class="crit"><b>' + cc.critical + '</b> critical</span>');
+  if (cc.high) cb.push('<b>' + cc.high + '</b> high');
+  if (cc.medium) cb.push('<b>' + cc.medium + '</b> medium');
+  if (cc.low) cb.push('<b>' + cc.low + '</b> low');
+  var gradeCol = el('div', { class: 'gradecol' }, [
+    grades,
+    el('div', { class: 'counts', html: cb.join(' · ') || 'no issues found' }),
+    el('div', { class: 'gnote' }, ['Leverage assessed separately']),
+  ]);
+  stage.appendChild(el('div', { class: 'band' }, [bandL, el('div', { class: 'band-r' }, [ringWrap, gradeCol])]));
+
+  // ---- One unified view: powers → exposure → the settings behind them ----
+  var allFiles = DATA.exposureFiles || [];
+  var reachFiles = allFiles.filter(function (f) { return f.reachable; });
+  var otherFiles = allFiles.filter(function (f) { return !f.reachable; });
+  var main = el('div', { class: 'main' }, [buildReachHero(reachFiles)]);
+  var scroll = el('div', { class: 'scroll' });
+  scroll.appendChild(reachFiles.length ? buildExposed(reachFiles, otherFiles) : buildCelebrate(otherFiles));
+  scroll.appendChild(buildSettings());
+  main.appendChild(scroll);
+  stage.appendChild(main);
+
+  // ---- Slim trust footer ----
+  var a = DATA.access;
+  stage.appendChild(el('div', { class: 'trust', html:
+    'Scanned <b>' + a.filesScanned + '</b> files · <b>read ' + a.contentsReadIntoContext + ' file contents into this conversation</b> · only your project and Claude\'s own settings were opened · every value masked.' }));
+
+  // ---- Animations ----
+  if (reduce) {
+    arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
+    document.getElementById('scoreNum').textContent = String(DATA.score);
+    revealBeam();
+  } else {
+    animateScore(arc, C);
+    animateBeam();
+    // Safety net: rAF/CSS transitions are throttled in a background tab, which
+    // would freeze the count-up and leave the beam rows hidden. Force the resting
+    // state regardless, a beat after the intro.
+    setTimeout(function () {
+      arc.setAttribute('stroke-dashoffset', String(C * (1 - DATA.score / 100)));
+      document.getElementById('scoreNum').textContent = String(DATA.score);
+      revealBeam();
+    }, 1600);
+  }
+
+  // =====================================================================
+  function scoreColor(s) { return s >= 85 ? '#6fae8f' : s >= 60 ? '#e8b54b' : '#e2563f'; }
+
+  function animateScore(arcEl, circ) {
+    var target = DATA.score, start = null, dur = 1100;
+    var label = document.getElementById('scoreNum');
+    function step(t) {
+      if (start === null) start = t;
+      var p = Math.min((t - start) / dur, 1), eased = 1 - Math.pow(1 - p, 3);
+      arcEl.setAttribute('stroke-dashoffset', String(circ * (1 - (target / 100) * eased)));
+      label.textContent = String(Math.round(target * eased));
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  // The hero: what Claude can do here, as capability chips, explicitly tied to
+  // the settings section below (settings are the cause; reach is the effect).
+  function buildReachHero(reach) {
+    var caps = (DATA.reachSummary && DATA.reachSummary.length) ? DATA.reachSummary : ['open files in this project'];
+    var capEls = caps.map(function (c, i) {
+      return el('span', { class: 'cap' + (i === 0 ? '' : ' warn') }, [c]);
+    });
+    var tie = reach.length
+      ? 'These powers come from your settings below — and they put the ' + reach.length + ' file' + (reach.length === 1 ? '' : 's') + ' below within reach.'
+      : 'These powers come from your settings below. Right now nothing sensitive sits within that reach.';
+    return el('div', { class: 'reachhero' }, [
+      el('span', { class: 'glyph' }, ['🧹']),
+      el('div', {}, [
+        el('div', { class: 'who' }, ['Claude can:']),
+        el('div', { class: 'caps' }, capEls),
+        el('div', { class: 'tie' }, [tie]),
+      ]),
+    ]);
+  }
+
+  function buildExposed(reach, other) {
+    var list = el('div', {});
+    reach.forEach(function (f) { list.appendChild(beamRow(f, true)); });
+    if (other.length) {
+      list.appendChild(el('div', { class: 'tie', style: 'margin:9px 0 6px' }, ['Sensitive, but Claude can’t reach these:']));
+      other.forEach(function (f) { list.appendChild(beamRow(f, false)); });
+    }
+    return el('div', { class: 'sect exposed' }, [
+      el('h2', { html: 'What’s exposed <small>' + reach.length + ' Claude can reach</small><span class="hint">tap a row for details</span>' }),
+      list,
+    ]);
+  }
+
+  function buildCelebrate(other) {
+    var hasOther = !!(other && other.length);
+    var banner = el('div', { class: 'celebrate' + (hasOther ? ' compact' : '') }, [
+      el('div', { class: 'check' }, ['✓']),
+      el('div', { class: 'big' }, ['Nothing sensitive is in reach']),
+      el('div', { class: 'sub' }, [hasOther
+        ? 'Claude can’t get to anything risky here — the sensitive files below are all out of its reach.'
+        : 'Claude can’t get to anything risky in this project — you’re in good shape. The settings below are just notes.']),
+    ]);
+    // Even with nothing reachable, still list any sensitive-but-protected files so
+    // the user can see — and verify — exactly what their deny rules are guarding.
+    if (!hasOther) return banner;
+    var list = el('div', {});
+    other.forEach(function (f) { list.appendChild(beamRow(f, false)); });
+    return el('div', { class: 'sect exposed' }, [
+      banner,
+      el('h2', { html: 'Sensitive, but out of reach <small>' + other.length + ' protected</small><span class="hint">tap a row for details</span>' }),
+      list,
+    ]);
+  }
+
+  function beamRow(f, reachable) {
+    var bits = [
+      el('span', { class: 'arrow' }, [reachable ? 'can open →' : 'can’t reach']),
+      el('span', { class: 'fn' }, [baseName(f.file)]),
+      el('span', { class: 'meta' }, [' · ' + f.count + (f.count === 1 ? ' item' : ' items') + ' · ' + (f.severity || 'info')]),
+    ];
+    if (DATA.baselineActive && f.isNew) bits.push(el('span', { class: 'tag newt' }, ['new']));
+    bits.push(el('span', { class: 'chev' }, ['▸']));
+    var head = el('div', { class: 'bhead' }, bits);
+
+    var detail = el('div', { class: 'detail' });
+    var sm = (f.marks || []).filter(function (m) { return m.redactedMatch; });
+    if (sm.length) {
+      detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">found</span>' + sm.map(function (m) {
+        return (m.line ? '<span class="loc">line ' + escJs(m.line) + '</span> ' : '') + '<code>' + escJs(m.redactedMatch) + '</code>';
+      }).join('  ') }));
+    }
+    if (f.why) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">why</span>' + escJs(f.why) }));
+    if (f.fix) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">fix</span>' + escJs(f.fix) }));
+    detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">where</span><span class="loc">' + escJs(f.file) + '</span>' }));
+
+    var row = el('div', { class: 'brow' + (reachable ? '' : ' safe') }, [head, detail]);
+    head.addEventListener('click', function () { row.classList.toggle('open'); });
+    return row;
+  }
+
+  function revealBeam() { each('.brow', function (r) { r.style.opacity = '1'; r.style.transform = 'none'; }); }
+  function animateBeam() {
+    each('.brow', function (r, i) {
+      r.style.opacity = '0'; r.style.transform = 'translateX(-8px)';
+      r.style.transition = 'opacity .35s ease, transform .35s ease';
+      setTimeout(function () { r.style.opacity = '1'; r.style.transform = 'none'; }, 250 + i * 110);
+    });
+  }
+
+  // Settings findings as an accordion — the cause of the reach above. Collapsed
+  // stays dense; each expands to why, how it was detected, the fix, and where.
+  function buildSettings() {
+    var sf = DATA.settingsFindings || [];
+    var list = el('div', { class: 'plist' });
+    sf.forEach(function (f) {
+      var bits = [
+        el('span', { class: 'sev s-' + escJs(f.severity || 'info') }, [f.severity || 'info']),
+        el('span', { class: 'stitle' }, [f.title || '']),
+      ];
+      if (f.file) bits.push(el('span', { class: 'file' }, [f.file]));
+      bits.push(el('span', { class: 'chev' }, ['▸']));
+      var head = el('div', { class: 'shead' }, bits);
+
+      var detail = el('div', { class: 'detail' });
+      if (f.why) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">why</span>' + escJs(f.why) }));
+      if (f.evidence) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">how we know</span>' + escJs(f.evidence) }));
+      if (f.fix) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">fix</span>' + escJs(f.fix) }));
+      if (f.file) detail.appendChild(el('div', { class: 'drow', html: '<span class="lbl">where</span><span class="loc">' + escJs(f.file) + (f.line ? ':' + escJs(f.line) : '') + '</span>' }));
+      if (!f.why && !f.evidence && !f.fix) detail.appendChild(el('div', { class: 'drow loc' }, ['No extra detail for this one.']));
+
+      var row = el('div', { class: 'srow' }, [head, detail]);
+      head.addEventListener('click', function () { row.classList.toggle('open'); });
+      list.appendChild(row);
+    });
+    return el('div', { class: 'sect settings' }, [
+      el('h2', { html: 'The settings behind this <small>' + sf.length + '</small><span class="hint">tap a row for details</span>' }),
+      list,
+    ]);
+  }
+
+  // helpers
+  function baseName(p) { var s = String(p).split(/[\\\/]/); return s[s.length - 1]; }
+  function each(sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); }
+  function escJs(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+})();
+`;
+
+// ---------------------------------------------------------------------------
+// MAIN
+// ---------------------------------------------------------------------------
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  let raw;
+  try {
+    raw = readInput(args.input);
+  } catch (e) {
+    process.stderr.write(`fantasia-visual: could not read input (${e && e.message ? e.message : e}). Pipe \`fantasia-scan --json\` in, or pass a JSON file path.\n`);
+    process.exit(1);
+    return;
+  }
+
+  let scan;
+  try {
+    scan = JSON.parse(raw);
+  } catch (e) {
+    process.stderr.write(`fantasia-visual: input was not valid JSON. Expected the output of \`fantasia-scan --json\`.\n`);
+    process.exit(1);
+    return;
+  }
+
+  const model = buildModel(scan, args.title);
+  const html = renderHtml(model);
+
+  if (args.out) {
+    fs.writeFileSync(args.out, html, 'utf8');
+    process.stderr.write(`fantasia-visual: wrote ${args.out}\n`);
+  } else {
+    // Write to stdout and let the process exit naturally once the buffer drains.
+    // Calling process.exit(0) here would truncate a piped/redirected report on
+    // Windows, where stdout is async and may not have flushed yet.
+    process.stdout.write(html);
+  }
+}
+
+main();

@@ -32,6 +32,14 @@ claude plugin validate .    # structure check
 It's plain Node with no dependencies and runs on Windows, macOS, and Linux. If
 you add a rule, add a test that proves it fires and that the secret stays masked.
 
+## If you touch the visual report
+
+`bin/fantasia-visual` renders a scan into the self-contained `FANTASIA-REPORT.html`.
+It consumes **only** the scanner's already-redacted JSON — never a project file —
+so the masking rule above is preserved by construction. It's zero-dependency Node;
+every dynamic value is HTML-escaped and the embedded data blob is guarded so it
+can't break out of `<script>`. Keep both invariants if you change it.
+
 ## Pull requests
 
 Keep changes focused, run the tests, and say what a user would see differently.
